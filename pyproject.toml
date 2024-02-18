@@ -1,0 +1,27 @@
+[project]
+name = "overmind"
+version = "0.1.0"
+description = "Daemon to serve shared PyTorch models"
+authors = [
+    {name = "Proton", email = "feisuzhu@163.com"},
+]
+dependencies = [
+    "rpyc>=5.3.1",
+    "daemonize>=2.5.0",
+    "torch>=2.1.2",
+    "frozendict>=2.4.0",
+]
+requires-python = ">=3.8"
+readme = "README.md"
+license = {text = "Apache"}
+
+[project.scripts]
+overmind-server = "overmind.server:start"
+overmind-reset = "overmind.cli:reset"
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.pdm]
+distribution = true
