@@ -86,7 +86,10 @@ load = om.load
 def monkey_patch(modulename, clsname, method):
     try:
         module = importlib.import_module(modulename)
-        cls = getattr(module, clsname)
+        if clsname is None:
+            cls = module
+        else:
+            cls = getattr(module, clsname)
     except ModuleNotFoundError, AttributeError:
         log.info(f'Could not import {modulename}.{clsname}, skipping monkey patching')
         return
@@ -102,6 +105,8 @@ def monkey_patch_all():
     monkey_patch('transformers.modeling_utils',          'PreTrainedModel',         'from_pretrained')
     monkey_patch('transformers.tokenization_utils_base', 'PreTrainedTokenizerBase', 'from_pretrained')
     monkey_patch('transformers',                         'AutoProcessor',           'from_pretrained')
+    monkey_patch('torchvision.models.vgg',               None,                      'vgg19')
+    monkey_patch('torchvision.models.vgg',               None,                      'vgg16')
 
 
 def _init():
