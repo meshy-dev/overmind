@@ -3,16 +3,16 @@
 # -- stdlib --
 from pathlib import Path
 import argparse
-import time
-import pickle
-from frozendict import deepfreeze
 import inspect
 import logging
 import multiprocessing.reduction
+import pickle
+import time
 import types
 
 # -- third party --
 from daemonize import Daemonize
+from frozendict import deepfreeze
 from rpyc.utils.server import ThreadedServer
 import rpyc
 import torch.multiprocessing as mp
@@ -68,7 +68,7 @@ class OvermindService(rpyc.Service):
         else:
             fndisp = fn.__name__
 
-        args_disp = [f'{k}={v}' for k, v in bs.arguments.items()]
+        args_disp = [f'{k}={repr(v)}' for k, v in bs.arguments.items()]
 
         disp = f'{fndisp}({", ".join(args_disp)})'
 
