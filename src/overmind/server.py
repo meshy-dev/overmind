@@ -3,6 +3,7 @@
 # -- stdlib --
 from pathlib import Path
 import argparse
+import os
 import inspect
 import logging
 import multiprocessing.reduction
@@ -11,7 +12,6 @@ import types
 import uuid
 
 # -- third party --
-from daemonize import Daemonize
 from frozendict import deepfreeze
 from rpyc.utils.server import ThreadedServer
 import rpyc
@@ -119,19 +119,19 @@ def daemon_main():
 
 def start():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--daemon', action='store_true')
+    parser.add_argument('--fork', action='store_true')
     options = parser.parse_args()
+    from overmind.utils.log import init as init_log
 
-    if options.daemon:
-        pid = Path('/tmp/overmind.pid')
-        if pid.exists():
-            pid.unlink()
-        daemon = Daemonize(app="overmind", pid="/tmp/overmind.pid", action=daemon_main, logger=logging.getLogger('daemonize'))
-        daemon.start()
+    if options.fork:
+        if os.fork():
+            return
+        os.setsid()
+        init_log(logging.DEBUG, '/tmp/overmind.log')
     else:
-        from overmind.utils.log import init as init_log
         init_log(logging.DEBUG, None)
-        main()
+
+    main()
 
 
 if __name__ == '__main__':

@@ -55,9 +55,14 @@ class OvermindClient:
         if self._is_client_ok():
             return
 
+        if sys.platform == 'win32':
+            log.warning('Overmind server will not auto start on Windows, please start it manually. Falling back to local mode')
+            self.enabled = False
+            return
+
         log.debug('Starting overmind server as daemon...')
         # if os.system(f'{sys.executable} -m overmind.server --daemon') != 0:
-        if os.system('overmind-server --daemon') != 0:
+        if os.system('overmind-server --fork') != 0:
             raise RuntimeError('Failed to start overmind server')
 
         time.sleep(0.5)
