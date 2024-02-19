@@ -32,6 +32,7 @@ class OvermindService(rpyc.Service):
         super().__init__()
         self._models = {}
         self._models_byref = {}
+        self._models_disp = []  # solely for debugging
 
     def exposed_ping(self):
         return 'pong'
@@ -54,6 +55,7 @@ class OvermindService(rpyc.Service):
         rid = str(uuid.uuid4())
         model._overmind_ref = rid
         self._models_byref[rid] = model
+        self._models_disp.append(disp)
         data = bytes(Pickler.dumps(self._models[key]))
         log.info(f'Will send {len(data)} bytes')
         return data
@@ -62,6 +64,10 @@ class OvermindService(rpyc.Service):
         log.info('!! Reset cache')
         self._models.clear()
         self._models_byref.clear()
+        self._models_disp.clear()
+
+    def exposed_list_loaded(self):
+        return self._models_disp
 
     def _convert_refs(self, obj):
         if isinstance(obj, (list, tuple)):

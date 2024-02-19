@@ -17,6 +17,7 @@ license = {text = "Apache"}
 [project.scripts]
 overmind-server = "overmind.server:start"
 overmind-reset = "overmind.cli:reset"
+overmind-list = "overmind.cli:list_loaded"
 
 [build-system]
 requires = ["pdm-backend"]
