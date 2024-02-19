@@ -1,6 +1,6 @@
 [project]
 name = "overmind"
-version = "0.1.2"
+version = "0.1.3"
 description = "Daemon to serve shared PyTorch models"
 authors = [
     {name = "Proton", email = "feisuzhu@163.com"},
