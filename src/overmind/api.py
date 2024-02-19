@@ -4,6 +4,7 @@
 from multiprocessing.reduction import ForkingPickler as Pickler
 from pathlib import Path
 from typing import Any
+import fcntl
 import importlib
 import importlib.util
 import logging
@@ -60,21 +61,32 @@ class OvermindClient:
             self.enabled = False
             return
 
-        log.debug('Starting overmind server as daemon...')
-        # if os.system(f'{sys.executable} -m overmind.server --daemon') != 0:
-        if os.system('overmind-server --fork') != 0:
-            raise RuntimeError('Failed to start overmind server')
+        with open('/tmp/overmind.lock', 'w') as lockf:
+            while True:
+                try:
+                    fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if self._is_client_ok():
+                        return
+                    time.sleep(0.1)
+                    return
 
-        time.sleep(0.5)
+            log.debug('Starting overmind server as daemon...')
+            # if os.system(f'{sys.executable} -m overmind.server --daemon') != 0:
+            if os.system('overmind-server --fork') != 0:
+                raise RuntimeError('Failed to start overmind server')
 
-        try:
-            log.debug('Connecting to newly spawned overmind server...')
-            self.client = rpyc.utils.factory.unix_connect('/tmp/overmind.sock')
-        except Exception:
-            log.exception('Failed to spawn overmind server')
+            time.sleep(0.5)
 
-        if self._is_client_ok():
-            return
+            try:
+                log.debug('Connecting to newly spawned overmind server...')
+                self.client = rpyc.utils.factory.unix_connect('/tmp/overmind.sock')
+            except Exception:
+                log.exception('Failed to spawn overmind server')
+
+            if self._is_client_ok():
+                return
 
         log.warning('Could not connect to overmind server, falling back to local mode')
         self.enabled = False
