@@ -6,6 +6,7 @@ import argparse
 import os
 import inspect
 import logging
+import threading
 import multiprocessing.reduction
 import time
 import types
@@ -33,6 +34,7 @@ class OvermindService(rpyc.Service):
         self._models = {}
         self._models_byref = {}
         self._models_disp = []  # solely for debugging
+        self._loading = threading.Lock()
 
     def exposed_ping(self):
         return 'pong'
@@ -44,21 +46,24 @@ class OvermindService(rpyc.Service):
             log.debug('Providing cached model %s', disp)
             return bytes(Pickler.dumps(self._models[key]))
 
-        assert key not in self._models
+        with self._loading:
+            if key in self._models:
+                log.debug('Providing cached model (just loaded!) %s', disp)
+                return bytes(Pickler.dumps(self._models[key]))
 
-        args, kwargs = self._convert_refs((args, kwargs))
-        log.info('Cold load model %s', disp)
-        b4 = time.time()
-        model = fn(*args, **kwargs)
-        log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
-        self._models[key] = model
-        rid = str(uuid.uuid4())
-        model._overmind_ref = rid
-        self._models_byref[rid] = model
-        self._models_disp.append(disp)
-        data = bytes(Pickler.dumps(self._models[key]))
-        log.info(f'Will send {len(data)} bytes')
-        return data
+            args, kwargs = self._convert_refs((args, kwargs))
+            log.info('Cold load model %s', disp)
+            b4 = time.time()
+            model = fn(*args, **kwargs)
+            log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
+            self._models[key] = model
+            rid = str(uuid.uuid4())
+            model._overmind_ref = rid
+            self._models_byref[rid] = model
+            self._models_disp.append(disp)
+            data = bytes(Pickler.dumps(self._models[key]))
+            log.info(f'Will send {len(data)} bytes')
+            return data
 
     def exposed_reset(self):
         log.info('!! Reset cache')
