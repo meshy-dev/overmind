@@ -6,9 +6,9 @@ import argparse
 import inspect
 import logging
 import multiprocessing.reduction
-import pickle
 import time
 import types
+import uuid
 
 # -- third party --
 from daemonize import Daemonize
@@ -18,6 +18,8 @@ import rpyc
 import torch.multiprocessing as mp
 
 # -- own --
+from .common import OvermindObjectRef
+
 
 # -- code --
 Pickler = multiprocessing.reduction.ForkingPickler
@@ -29,12 +31,13 @@ class OvermindService(rpyc.Service):
     def __init__(self):
         super().__init__()
         self._models = {}
+        self._models_byref = {}
 
     def exposed_ping(self):
         return 'pong'
 
     def exposed_load(self, pickled):
-        fn, args, kwargs = pickle.loads(pickled)
+        fn, args, kwargs = Pickler.loads(pickled)
         key, disp = self._key_of(fn, args, kwargs)
         if key in self._models:
             log.debug('Providing cached model %s', disp)
@@ -42,16 +45,33 @@ class OvermindService(rpyc.Service):
 
         assert key not in self._models
 
+        args, kwargs = self._convert_refs((args, kwargs))
         log.info('Cold load model %s', disp)
         b4 = time.time()
         model = fn(*args, **kwargs)
         log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
         self._models[key] = model
-        return bytes(Pickler.dumps(self._models[key]))
+        rid = str(uuid.uuid4())
+        model._overmind_ref = rid
+        self._models_byref[rid] = model
+        data = bytes(Pickler.dumps(self._models[key]))
+        log.info(f'Will send {len(data)} bytes')
+        return data
 
     def exposed_reset(self):
         log.info('!! Reset cache')
         self._models.clear()
+        self._models_byref.clear()
+
+    def _convert_refs(self, obj):
+        if isinstance(obj, (list, tuple)):
+            return obj.__class__([self._convert_refs(x) for x in obj])
+        elif isinstance(obj, dict):
+            return {k: self._convert_refs(v) for k, v in obj.items()}
+        elif isinstance(obj, OvermindObjectRef):
+            return self._models_byref[str(obj)]
+        else:
+            return obj
 
     def _key_of(self, fn, args, kwargs):
         s = inspect.signature(fn)
@@ -85,20 +105,28 @@ def main():
     server.start()
 
 
+def daemon_main():
+    from overmind.utils.log import init as init_log
+    init_log(logging.DEBUG, '/tmp/overmind.log')
+    main()
+
+
 def start():
     parser = argparse.ArgumentParser()
     parser.add_argument('--daemon', action='store_true')
     options = parser.parse_args()
 
-    from overmind.utils.log import init as init_log
-
     if options.daemon:
-        init_log(logging.INFO, '/tmp/overmind.log')
-        daemon = Daemonize(app="overmind", pid="/tmp/overmind.pid", action=main, logger=logging.getLogger('daemonize'))
+        pid = Path('/tmp/overmind.pid')
+        if pid.exists():
+            pid.unlink()
+        daemon = Daemonize(app="overmind", pid="/tmp/overmind.pid", action=daemon_main, logger=logging.getLogger('daemonize'))
         daemon.start()
     else:
+        from overmind.utils.log import init as init_log
         init_log(logging.DEBUG, None)
         main()
+
 
 if __name__ == '__main__':
     start()

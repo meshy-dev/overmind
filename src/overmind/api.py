@@ -4,7 +4,7 @@
 from typing import Any
 import time
 import os
-import pickle
+import sys
 import logging
 import importlib
 
@@ -15,6 +15,7 @@ from multiprocessing.reduction import ForkingPickler as Pickler
 
 # -- own --
 from .utils.misc import hook
+from .common import OvermindObjectRef
 
 # -- code --
 log = logging.getLogger('overmind.api')
@@ -46,12 +47,13 @@ class OvermindClient:
             log.debug('Connecting to existing overmind server...')
             self.client = rpyc.utils.factory.unix_connect('/tmp/overmind.sock')
         except Exception:
-            raise
+            pass
 
         if self._is_client_ok():
             return
 
         log.debug('Starting overmind server as daemon...')
+        # if os.system(f'{sys.executable} -m overmind.server --daemon') != 0:
         if os.system('overmind-server --daemon') != 0:
             raise RuntimeError('Failed to start overmind server')
 
@@ -61,7 +63,7 @@ class OvermindClient:
             log.debug('Connecting to newly spawned overmind server...')
             self.client = rpyc.utils.factory.unix_connect('/tmp/overmind.sock')
         except Exception:
-            raise
+            log.exception('Failed to spawn overmind server')
 
         if self._is_client_ok():
             return
@@ -69,13 +71,25 @@ class OvermindClient:
         log.warning('Could not connect to overmind server, falling back to local mode')
         self.enabled = False
 
+    def _convert_to_refs(self, obj):
+        if isinstance(obj, (list, tuple)):
+            return obj.__class__([self._convert_to_refs(x) for x in obj])
+        elif isinstance(obj, dict):
+            return {k: self._convert_to_refs(v) for k, v in obj.items()}
+        elif (rid := getattr(obj, '_overmind_ref', None)) is not None:
+            return OvermindObjectRef(str(rid))
+        else:
+            return obj
+
     def load(self, fn, *args, **kwargs):
         self._init_client()
 
         if not self.enabled:
             return fn(*args, **kwargs)
 
-        b: bytes = self.client.root.load(pickle.dumps((fn, args, kwargs)))
+        payload = self._convert_to_refs((fn, args, kwargs))
+
+        b: bytes = self.client.root.load(bytes(Pickler.dumps(payload)))
         return Pickler.loads(b)
 
 
@@ -90,7 +104,7 @@ def monkey_patch(modulename, clsname, method):
             cls = module
         else:
             cls = getattr(module, clsname)
-    except ModuleNotFoundError, AttributeError:
+    except (ModuleNotFoundError, AttributeError):
         log.info(f'Could not import {modulename}.{clsname}, skipping monkey patching')
         return
 
@@ -99,6 +113,9 @@ def monkey_patch(modulename, clsname, method):
 
 
 def monkey_patch_all():
+
+    from diffusers.models.modeling_utils import ModelMixin
+
     monkey_patch('diffusers.pipelines.pipeline_utils',   'DiffusionPipeline',       'from_pretrained')
     monkey_patch('diffusers.models.modeling_utils',      'ModelMixin',              'from_pretrained')
     monkey_patch('diffusers.schedulers.scheduler_utils', 'SchedulerMixin',          'from_pretrained')

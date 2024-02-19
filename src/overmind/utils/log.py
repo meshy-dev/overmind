@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 
 # -- stdlib --
-from typing import Any
-import datetime
 import logging
 import sys
 
