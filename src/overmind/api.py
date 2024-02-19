@@ -67,9 +67,12 @@ class OvermindClient:
                     fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except BlockingIOError:
+                    time.sleep(0.1)
                     if self._is_client_ok():
                         return
-                    time.sleep(0.1)
+
+            if self._is_client_ok():
+                return
 
             log.debug('Starting overmind server as daemon...')
             # if os.system(f'{sys.executable} -m overmind.server --daemon') != 0:
