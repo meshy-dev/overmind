@@ -1,21 +1,24 @@
 # -*- coding: utf-8 -*-
 
 # -- stdlib --
+from multiprocessing.reduction import ForkingPickler as Pickler
+from pathlib import Path
 from typing import Any
-import time
+import importlib
+import importlib.util
+import logging
 import os
 import sys
-import logging
-import importlib
+import time
 
 # -- third party --
 import rpyc.utils.factory
 import torch.multiprocessing as mp
-from multiprocessing.reduction import ForkingPickler as Pickler
 
 # -- own --
-from .utils.misc import hook
 from .common import OvermindObjectRef
+from .utils.misc import hook
+
 
 # -- code --
 log = logging.getLogger('overmind.api')
@@ -126,8 +129,31 @@ def monkey_patch_all():
     monkey_patch('torchvision.models.vgg',               None,                      'vgg16')
 
 
+def diffusers_dyn_module_workaround():
+    try:
+        from diffusers.utils.constants import HF_MODULES_CACHE
+    except ImportError:
+        return
+
+    modpath = Path(HF_MODULES_CACHE) / "diffusers_modules/__init__.py"
+
+    if not modpath.exists():
+        modpath.parent.mkdir(parents=True, exist_ok=True)
+        modpath.touch()
+
+    spec = importlib.util.spec_from_file_location("diffusers_modules", modpath)
+    assert spec
+    foo = importlib.util.module_from_spec(spec)
+    sys.modules["diffusers_modules"] = foo
+
+
+def apply_quirks():
+    diffusers_dyn_module_workaround()
+
+
 def _init():
     mp.set_sharing_strategy('file_system')
+    apply_quirks()
 
 
 _init()
