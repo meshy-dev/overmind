@@ -70,7 +70,6 @@ class OvermindClient:
                     if self._is_client_ok():
                         return
                     time.sleep(0.1)
-                    return
 
             log.debug('Starting overmind server as daemon...')
             # if os.system(f'{sys.executable} -m overmind.server --daemon') != 0:
