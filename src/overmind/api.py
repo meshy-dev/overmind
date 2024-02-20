@@ -40,6 +40,13 @@ class OvermindClient:
         except Exception:
             return False
 
+    def _try_connect(self):
+        try:
+            log.debug('Try connecting to overmind server...')
+            self.client = rpyc.utils.factory.unix_connect('/tmp/overmind.sock')
+        except Exception:
+            pass
+
     def _init_client(self):
         if not self.enabled:
             return
@@ -47,17 +54,13 @@ class OvermindClient:
         if self._is_client_ok():
             return
 
-        try:
-            log.debug('Connecting to existing overmind server...')
-            self.client = rpyc.utils.factory.unix_connect('/tmp/overmind.sock')
-        except Exception:
-            pass
+        self._try_connect()
 
         if self._is_client_ok():
             return
 
         if sys.platform == 'win32':
-            log.warning('Overmind server will not auto start on Windows, please start it manually. Falling back to local mode')
+            log.warning('Overmind server will not auto start on Windows, please start it manually. Falling back to local mode.')
             self.enabled = False
             return
 
@@ -67,10 +70,12 @@ class OvermindClient:
                     fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except BlockingIOError:
-                    time.sleep(0.1)
+                    time.sleep(0.3)
+                    self._try_connect()
                     if self._is_client_ok():
                         return
 
+            self._try_connect()
             if self._is_client_ok():
                 return
 
