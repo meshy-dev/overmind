@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # -- stdlib --
+from functools import lru_cache
 from multiprocessing.reduction import ForkingPickler as Pickler
 from pathlib import Path
 from typing import Any
@@ -13,12 +14,13 @@ import sys
 import time
 
 # -- third party --
-import rpyc.utils.factory
-import torch.multiprocessing as mp
-
 # -- own --
 from .common import OvermindObjectRef
 from .utils.misc import hook
+
+# -- errord --
+import rpyc.utils.factory
+import torch.multiprocessing as mp
 
 
 # -- code --
@@ -139,10 +141,9 @@ def monkey_patch(modulename, clsname, method):
     log.info(f'Patched {modulename}.{clsname}.{method}')
 
 
+
+@lru_cache(1)
 def monkey_patch_all():
-
-    from diffusers.models.modeling_utils import ModelMixin
-
     monkey_patch('diffusers.pipelines.pipeline_utils',   'DiffusionPipeline',       'from_pretrained')
     monkey_patch('diffusers.models.modeling_utils',      'ModelMixin',              'from_pretrained')
     monkey_patch('diffusers.schedulers.scheduler_utils', 'SchedulerMixin',          'from_pretrained')
