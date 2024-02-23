@@ -141,6 +141,17 @@ def monkey_patch(modulename, clsname, method):
     log.info(f'Patched {modulename}.{clsname}.{method}')
 
 
+def monkey_patch_torch_load():
+    import torch
+
+    @hook(torch)
+    def load(orig, f, map_location=None, **kwargs):
+        if map_location == 'cpu':
+            return load(orig, f, map_location, **kwargs)
+        else:
+            log.warning('torch.load called with map_location != "cpu", falling back to local mode')
+            return orig(f, map_location, **kwargs)
+
 
 @lru_cache(1)
 def monkey_patch_all():
@@ -152,6 +163,8 @@ def monkey_patch_all():
     monkey_patch('transformers',                         'AutoProcessor',           'from_pretrained')
     monkey_patch('torchvision.models.vgg',               None,                      'vgg19')
     monkey_patch('torchvision.models.vgg',               None,                      'vgg16')
+
+    monkey_patch_torch_load()
 
 
 def diffusers_dyn_module_workaround():
