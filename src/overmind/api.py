@@ -9,6 +9,7 @@ import fcntl
 import importlib
 import importlib.util
 import logging
+import inspect
 import os
 import sys
 import time
@@ -116,7 +117,10 @@ class OvermindClient:
         if not self.enabled:
             return fn(*args, **kwargs)
 
-        payload = self._convert_to_refs((fn, args, kwargs))
+        s = inspect.signature(fn)
+        bs = s.bind(*args, **kwargs)
+        kwargs = bs.arguments
+        payload = self._convert_to_refs((fn, kwargs))
 
         b: bytes = self.client.root.load(bytes(Pickler.dumps(payload)))
         return Pickler.loads(b)
@@ -144,13 +148,15 @@ def monkey_patch(modulename, clsname, method):
 def monkey_patch_torch_load():
     import torch
 
-    @hook(torch, name='load')
     def hook_load(orig, f, map_location=None, **kwargs):
         if map_location == 'cpu':
             return load(orig, f, map_location, **kwargs)
         else:
             log.warning('torch.load called with map_location != "cpu", falling back to local mode')
             return orig(f, map_location, **kwargs)
+
+    hook(torch, name='load')(hook_load)
+    hook(torch.jit, name='load')(hook_load)
 
 
 @lru_cache(1)
@@ -163,6 +169,7 @@ def monkey_patch_all():
     monkey_patch('transformers',                         'AutoProcessor',           'from_pretrained')
     monkey_patch('torchvision.models.vgg',               None,                      'vgg19')
     monkey_patch('torchvision.models.vgg',               None,                      'vgg16')
+    monkey_patch('open_clip',                            None,                      'create_model_and_transforms')
 
     monkey_patch_torch_load()
 

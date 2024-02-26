@@ -3,11 +3,10 @@
 # -- stdlib --
 from pathlib import Path
 import argparse
-import os
-import inspect
 import logging
-import threading
 import multiprocessing.reduction
+import os
+import threading
 import time
 import types
 import uuid
@@ -16,6 +15,7 @@ import uuid
 from frozendict import deepfreeze
 from rpyc.utils.server import ThreadedServer
 import rpyc
+import torch
 import torch.multiprocessing as mp
 
 # -- own --
@@ -40,25 +40,39 @@ class OvermindService(rpyc.Service):
         return 'pong'
 
     def exposed_load(self, pickled):
-        fn, args, kwargs = Pickler.loads(pickled)
-        key, disp = self._key_of(fn, args, kwargs)
+        fn, kwargs = Pickler.loads(pickled)
+        key = (fn, deepfreeze(kwargs))
+        disp = self._disp_of(fn, kwargs)
+
+        # Heuristics:
+        if 'device' in kwargs and kwargs.get('device') not in ('cpu', torch.device('cpu')):
+            log.error('Not caching model %s because it is not on CPU', disp)
+            raise ValueError(f'Not caching model {disp} because it is not on CPU')
+        # End of heuristics
+
         if key in self._models:
-            log.debug('Providing cached model %s', disp)
-            return bytes(Pickler.dumps(self._models[key]))
+            payload = bytes(Pickler.dumps(self._models[key]))
+            log.debug('Providing cached model %s (%s bytes over wire)', disp, len(payload))
+            return payload
 
         with self._loading:
             if key in self._models:
                 log.debug('Providing cached model (just loaded!) %s', disp)
                 return bytes(Pickler.dumps(self._models[key]))
 
-            args, kwargs = self._convert_refs((args, kwargs))
+            kwargs = self._convert_refs(kwargs)
             log.info('Cold load model %s', disp)
             b4 = time.time()
-            model = fn(*args, **kwargs)
+            model = fn(**kwargs)
             log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
             self._models[key] = model
             rid = str(uuid.uuid4())
-            model._overmind_ref = rid
+
+            try:
+                model._overmind_ref = rid
+            except AttributeError:
+                pass
+
             self._models_byref[rid] = model
             self._models_disp.append(disp)
             data = bytes(Pickler.dumps(self._models[key]))
@@ -84,26 +98,20 @@ class OvermindService(rpyc.Service):
         else:
             return obj
 
-    def _key_of(self, fn, args, kwargs):
-        s = inspect.signature(fn)
-        bs = s.bind(*args, **kwargs)
-        bs.apply_defaults()
-        args = deepfreeze(bs.arguments)
-
+    def _disp_of(self, fn, kwargs):
         if isinstance(fn, types.MethodType):
             if isinstance(fn.__self__, type):
                 ty = fn.__self__
             else:
                 ty = type(fn.__self__)
-            fndisp = f'{ty.__name__}.{fn.__name__}'
+            fndisp = f'{ty.__module__}.{ty.__name__}.{fn.__name__}'
         else:
-            fndisp = fn.__name__
+            fndisp = f'{fn.__module__}.{fn.__name__}'
 
-        args_disp = [f'{k}={repr(v)}' for k, v in bs.arguments.items()]
+        args_disp = [f'{k}={repr(v)}' for k, v in kwargs.items()]
 
         disp = f'{fndisp}({", ".join(args_disp)})'
-
-        return (fn, args), disp
+        return disp
 
 
 def main():
