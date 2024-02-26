@@ -144,8 +144,8 @@ def monkey_patch(modulename, clsname, method):
 def monkey_patch_torch_load():
     import torch
 
-    @hook(torch)
-    def load(orig, f, map_location=None, **kwargs):
+    @hook(torch, name='load')
+    def hook_load(orig, f, map_location=None, **kwargs):
         if map_location == 'cpu':
             return load(orig, f, map_location, **kwargs)
         else:
