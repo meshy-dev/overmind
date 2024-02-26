@@ -25,7 +25,7 @@ from .common import OvermindObjectRef
 # -- code --
 Pickler = multiprocessing.reduction.ForkingPickler
 log = logging.getLogger('overmind.server')
-rpyc.core.protocol.DEFAULT_CONFIG['sync_request_timeout'] = 120
+rpyc.core.protocol.DEFAULT_CONFIG['sync_request_timeout'] = 900
 
 
 class OvermindService(rpyc.Service):

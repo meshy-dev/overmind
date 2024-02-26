@@ -26,7 +26,7 @@ from .utils.misc import hook
 
 # -- code --
 log = logging.getLogger('overmind.api')
-rpyc.core.protocol.DEFAULT_CONFIG['sync_request_timeout'] = 120
+rpyc.core.protocol.DEFAULT_CONFIG['sync_request_timeout'] = 900
 
 
 class OvermindClient:
