@@ -14,7 +14,7 @@ import uuid
 # -- third party --
 from frozendict import deepfreeze
 from rpyc.utils.server import ThreadedServer
-import rpyc
+import rpyc.core.protocol
 import torch
 import torch.multiprocessing as mp
 
@@ -25,6 +25,7 @@ from .common import OvermindObjectRef
 # -- code --
 Pickler = multiprocessing.reduction.ForkingPickler
 log = logging.getLogger('overmind.server')
+rpyc.core.protocol.DEFAULT_CONFIG['sync_request_timeout'] = 120
 
 
 class OvermindService(rpyc.Service):

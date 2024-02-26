@@ -8,24 +8,25 @@ from typing import Any
 import fcntl
 import importlib
 import importlib.util
-import logging
 import inspect
+import logging
 import os
 import sys
 import time
 
 # -- third party --
+import rpyc.core.protocol
+import rpyc.utils.factory
+import torch.multiprocessing as mp
+
 # -- own --
 from .common import OvermindObjectRef
 from .utils.misc import hook
 
-# -- errord --
-import rpyc.utils.factory
-import torch.multiprocessing as mp
-
 
 # -- code --
 log = logging.getLogger('overmind.api')
+rpyc.core.protocol.DEFAULT_CONFIG['sync_request_timeout'] = 120
 
 
 class OvermindClient:
