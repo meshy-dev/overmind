@@ -152,8 +152,11 @@ def monkey_patch_torch_load():
     def hook_load(orig, f, map_location=None, **kwargs):
         if map_location == 'cpu':
             return load(orig, f, map_location, **kwargs)
+        elif map_location is None:
+            log.warning('[overmind] torch.load called with map_location=None, aggressively assuming to load on CPU')
+            return load(orig, f, 'cpu', **kwargs)
         else:
-            log.warning('torch.load called with map_location != "cpu", falling back to local mode')
+            log.warning('[overmind] torch.load called with map_location != "cpu", falling back to local mode')
             return orig(f, map_location, **kwargs)
 
     hook(torch, name='load')(hook_load)
