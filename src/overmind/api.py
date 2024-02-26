@@ -121,6 +121,12 @@ class OvermindClient:
         s = inspect.signature(fn)
         bs = s.bind(*args, **kwargs)
         kwargs = bs.arguments
+
+        for k in kwargs:
+            if s.parameters[k].kind == inspect.Parameter.VAR_KEYWORD:
+                kwargs.update(kwargs.pop(k))
+                break
+
         payload = self._convert_to_refs((fn, kwargs))
 
         b: bytes = self.client.root.load(bytes(Pickler.dumps(payload)))
@@ -171,9 +177,9 @@ def monkey_patch_all():
     monkey_patch('transformers.modeling_utils',          'PreTrainedModel',         'from_pretrained')
     monkey_patch('transformers.tokenization_utils_base', 'PreTrainedTokenizerBase', 'from_pretrained')
     monkey_patch('transformers',                         'AutoProcessor',           'from_pretrained')
-    monkey_patch('torchvision.models.vgg',               None,                      'vgg19')
-    monkey_patch('torchvision.models.vgg',               None,                      'vgg16')
-    monkey_patch('open_clip',                            None,                      'create_model_and_transforms')
+    # monkey_patch('torchvision.models.vgg',               None,                      'vgg19')
+    # monkey_patch('torchvision.models.vgg',               None,                      'vgg16')
+    # monkey_patch('open_clip',                            None,                      'create_model_and_transforms')
 
     monkey_patch_torch_load()
 
