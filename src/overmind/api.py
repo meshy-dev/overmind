@@ -156,7 +156,7 @@ def monkey_patch_torch_load():
     import torch
 
     def hook_load(orig, f, map_location=None, **kwargs):
-        if map_location == 'cpu':
+        if map_location in ('cpu', torch.device("cpu")):
             return load(orig, f, map_location, **kwargs)
         elif map_location is None:
             log.warning('torch.load called with map_location=None, aggressively assuming to load on CPU')
