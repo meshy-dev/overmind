@@ -15,8 +15,6 @@ import uuid
 from frozendict import deepfreeze
 from rpyc.utils.server import ThreadedServer
 import rpyc.core.protocol
-import torch
-import torch.multiprocessing as mp
 
 # -- own --
 from .common import OvermindObjectRef
@@ -41,6 +39,8 @@ class OvermindService(rpyc.Service):
         return 'pong'
 
     def exposed_load(self, pickled):
+        import torch
+
         fn, kwargs = Pickler.loads(pickled)
         key = (fn, deepfreeze(kwargs))
         disp = self._disp_of(fn, kwargs)
@@ -116,6 +116,8 @@ class OvermindService(rpyc.Service):
 
 
 def main():
+    import torch.multiprocessing as mp
+
     mp.set_sharing_strategy('file_system')
     sock = Path('/tmp/overmind.sock')
     if sock.exists():
@@ -136,6 +138,8 @@ def start():
     parser.add_argument('--fork', action='store_true')
     options = parser.parse_args()
     from overmind.utils.log import init as init_log
+
+    os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
     if options.fork:
         if os.fork():

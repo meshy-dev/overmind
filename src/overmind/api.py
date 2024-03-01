@@ -113,6 +113,10 @@ class OvermindClient:
             return obj
 
     def load(self, fn, *args, **kwargs):
+        if os.environ.get('OVERMIND_DISABLE'):
+            log.warning('overmind disabled by OVERMIND_DISABLE env variable, loading model directly')
+            return fn(*args, **kwargs)
+
         self._init_client()
 
         if not self.enabled:
@@ -171,6 +175,10 @@ def monkey_patch_torch_load():
 
 @lru_cache(1)
 def monkey_patch_all():
+    if os.environ.get('OVERMIND_DISABLE'):
+        log.warning('overmind disabled by OVERMIND_DISABLE env variable, not monkey patching')
+        return
+
     monkey_patch('diffusers.pipelines.pipeline_utils',   'DiffusionPipeline',       'from_pretrained')
     monkey_patch('diffusers.models.modeling_utils',      'ModelMixin',              'from_pretrained')
     monkey_patch('diffusers.schedulers.scheduler_utils', 'SchedulerMixin',          'from_pretrained')
