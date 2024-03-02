@@ -6,7 +6,6 @@ from multiprocessing.reduction import ForkingPickler as Pickler
 from pathlib import Path
 from typing import Any
 import fcntl
-import types
 import importlib
 import importlib.util
 import inspect
@@ -14,6 +13,7 @@ import logging
 import os
 import sys
 import time
+import types
 
 # -- third party --
 import rpyc.core.protocol
