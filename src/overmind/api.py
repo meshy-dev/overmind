@@ -84,8 +84,9 @@ class OvermindClient:
                 return
 
             log.debug(f'[pid {os.getpid()}] Starting overmind server as daemon...')
+            mode = ('daemon', 'fork')[os.isatty(1)]
             # if os.system(f'{sys.executable} -m overmind.server --daemon') != 0:
-            if os.system('overmind-server --fork') != 0:
+            if os.system(f'overmind-server --{mode}') != 0:
                 raise RuntimeError('Failed to start overmind server')
 
             time.sleep(0.5)

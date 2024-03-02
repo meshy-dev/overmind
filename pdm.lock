@@ -5,7 +5,17 @@
 groups = ["default"]
 strategy = ["cross_platform", "inherit_metadata"]
 lock_version = "4.4.1"
-content_hash = "sha256:32e48f84346ce7100f2cf8781585ef6df362799d30129b6c7abb1cd03ff1844b"
+content_hash = "sha256:13595438b732b31fc5c18bfb5c10dd05d5a86278de9672c84f184c152d58fb8d"
+
+[[package]]
+name = "daemonize"
+version = "2.5.0"
+summary = "Library to enable your code run as a daemon process on Unix-like systems."
+groups = ["default"]
+files = [
+    {file = "daemonize-2.5.0-py2.py3-none-any.whl", hash = "sha256:9b6b91311a9d934ff3f5f766666635ca280d3de8e7137e4cd7d3f052543b989f"},
+    {file = "daemonize-2.5.0.tar.gz", hash = "sha256:dd026e4ff8d22cb016ed2130bc738b7d4b1da597ef93c074d2adb9e4dea08bc3"},
+]
 
 [[package]]
 name = "frozendict"
@@ -77,7 +87,7 @@ files = [
 
 [[package]]
 name = "rpyc"
-version = "5.3.1"
+version = "6.0.0"
 requires_python = ">=3.7"
 summary = "Remote Python Call (RPyC) is a transparent and symmetric distributed computing library"
 groups = ["default"]
@@ -85,6 +95,6 @@ dependencies = [
     "plumbum",
 ]
 files = [
-    {file = "rpyc-5.3.1-py3-none-any.whl", hash = "sha256:6e8153792ac221a80f420d2e0b241a10c6e43b105d325998b18a4e7af329f9ec"},
-    {file = "rpyc-5.3.1.tar.gz", hash = "sha256:f2233174879faf18ae266437d5a65511ce46c817cec4edc1344f036758cfbf52"},
+    {file = "rpyc-6.0.0-py3-none-any.whl", hash = "sha256:e86b5831378f794c623db46e8ade6fff766c56cf9dbe96886e614025b4647339"},
+    {file = "rpyc-6.0.0.tar.gz", hash = "sha256:a7e12b31f40978cbd6b74e0b713da389d4b2565cef612adcb0f4b41aeb188230"},
 ]
