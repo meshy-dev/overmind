@@ -2,16 +2,26 @@
 
 # -- stdlib --
 from functools import wraps
+from typing import Any
 import types
 
 # -- third party --
 # -- own --
 
 # -- code --
+LOOKUP_TABLE: Dict[Any, Any] = {}
+
+
+def hook_lookup(o: Any) -> Any:
+    return LOOKUP_TABLE.get(o)
+
+
 def hook(module, name=None):
     def inner(hooker):
         funcname = name or hooker.__name__
-        hookee = getattr(module, funcname)
+        hookee: Any = getattr(module, funcname)
+
+        assert hookee not in LOOKUP_TABLE
 
         if isinstance(hookee, types.MethodType) and isinstance(hookee.__self__, type):
             hookee = hookee.__func__
@@ -25,10 +35,8 @@ def hook(module, name=None):
             def real_hooker(*args, **kwargs):
                 return hooker(hookee, *args, **kwargs)
 
-        try:
-            real_hooker.orig = hookee
-        except AttributeError:
-            pass
+        LOOKUP_TABLE[real_hooker] = hookee
+        LOOKUP_TABLE[hookee] = real_hooker
 
         setattr(module, funcname, real_hooker)
         return real_hooker

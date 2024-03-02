@@ -6,6 +6,7 @@ from multiprocessing.reduction import ForkingPickler as Pickler
 from pathlib import Path
 from typing import Any
 import fcntl
+import types
 import importlib
 import importlib.util
 import inspect
@@ -21,7 +22,7 @@ import torch.multiprocessing as mp
 
 # -- own --
 from .common import OvermindObjectRef
-from .utils.misc import hook
+from .utils.misc import hook, hook_lookup
 
 
 # -- code --
@@ -132,6 +133,10 @@ class OvermindClient:
                 kwargs.update(kwargs.pop(k))
                 break
 
+        if isinstance(fn, types.FunctionType):
+            # This makes pickle happy
+            fn = hook_lookup(fn) or fn
+
         payload = self._convert_to_refs((fn, kwargs))
 
         b: bytes = self.client.root.load(bytes(Pickler.dumps(payload)))
@@ -186,9 +191,10 @@ def monkey_patch_all():
     monkey_patch('transformers.modeling_utils',          'PreTrainedModel',         'from_pretrained')
     monkey_patch('transformers.tokenization_utils_base', 'PreTrainedTokenizerBase', 'from_pretrained')
     monkey_patch('transformers',                         'AutoProcessor',           'from_pretrained')
-    # monkey_patch('torchvision.models.vgg',               None,                      'vgg19')
-    # monkey_patch('torchvision.models.vgg',               None,                      'vgg16')
-    # monkey_patch('open_clip',                            None,                      'create_model_and_transforms')
+    monkey_patch('torchvision.models.vgg',               None,                      'vgg19')
+    monkey_patch('torchvision.models.vgg',               None,                      'vgg16')
+    monkey_patch('open_clip',                            None,                      'create_model_and_transforms')
+    monkey_patch('safetensors.torch',                    None,                      'load_file')
 
     monkey_patch_torch_load()
 
