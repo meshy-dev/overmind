@@ -22,7 +22,7 @@ import torch.multiprocessing as mp
 
 # -- own --
 from .common import OvermindObjectRef
-from .utils.misc import hook, hook_lookup
+from .utils.misc import hook
 
 
 # -- code --
@@ -135,7 +135,7 @@ class OvermindClient:
 
         if isinstance(fn, types.FunctionType):
             # This makes pickle happy
-            fn = hook_lookup(fn) or fn
+            fn = (fn.__module__, fn.__name__)
 
         payload = self._convert_to_refs((fn, kwargs))
 

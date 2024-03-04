@@ -5,6 +5,7 @@ from pathlib import Path
 import argparse
 import logging
 import multiprocessing.reduction
+import importlib
 import os
 import threading
 import time
@@ -42,7 +43,14 @@ class OvermindService(rpyc.Service):
     def exposed_load(self, pickled):
         import torch
 
-        fn, kwargs = Pickler.loads(pickled)
+        v, kwargs = Pickler.loads(pickled)
+        if isinstance(v, tuple):
+            # This makes pickle happy
+            m, n = v
+            fn = getattr(importlib.import_module(m), n)
+        else:
+            fn = v
+
         key = (fn, deepfreeze(kwargs))
         disp = self._disp_of(fn, kwargs)
 
