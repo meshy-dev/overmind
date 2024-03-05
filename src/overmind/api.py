@@ -90,16 +90,13 @@ class OvermindClient:
             if os.system(f'overmind-server --{mode}') != 0:
                 raise RuntimeError('Failed to start overmind server')
 
-            time.sleep(0.5)
-
-            try:
-                log.debug('Connecting to newly spawned overmind server...')
-                self.client = rpyc.utils.factory.unix_connect('/tmp/overmind.sock')
-            except Exception:
-                log.exception('Failed to spawn overmind server')
-
-            if self._is_client_ok():
-                return
+            for _ in range(5):
+                time.sleep(1)
+                self._try_connect()
+                if self._is_client_ok():
+                    return
+            else:
+                log.error('Failed to spawn overmind server')
 
         log.warning('Could not connect to overmind server, falling back to local mode')
         self.enabled = False
