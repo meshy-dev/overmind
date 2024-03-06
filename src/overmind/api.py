@@ -5,7 +5,6 @@ from functools import lru_cache
 from multiprocessing.reduction import ForkingPickler as Pickler
 from pathlib import Path
 from typing import Any
-import fcntl
 import importlib
 import importlib.util
 import inspect
@@ -72,6 +71,8 @@ class OvermindClient:
         with open('/tmp/overmind.lock', 'w') as lockf:
             while True:
                 try:
+                    import fcntl
+
                     fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except BlockingIOError:

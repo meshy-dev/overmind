@@ -1,4 +1,7 @@
 from diffusers import DDIMScheduler, UNet2DConditionModel
+from diffusers import DiffusionPipeline
+import time
+import pysnooper
 import logging
 import torch
 from overmind.api import load
@@ -28,11 +31,12 @@ ckpt_path = hf_hub_download(
 
 from overmind.api import load
 from huggingface_hub import hf_hub_download
-import safetensors.torch
-ckpt_path = hf_hub_download(
-    repo_id="stabilityai/stable-diffusion-xl-refiner-1.0", filename="vae/diffusion_pytorch_model.safetensors"
-)
-assert ckpt_path is not None, "Failed to download the model checkpoint"
-foo = load(safetensors.torch.load_file, ckpt_path)
 
-print('ok')
+@pysnooper.snoop(relative_time=True)
+def foo():
+    pipeline = load(DiffusionPipeline.from_pretrained, "stabilityai/stable-diffusion-xl-refiner-1.0")
+    pipeline.to('cuda')
+    print('ok')
+
+foo()
+time.sleep(1000)
