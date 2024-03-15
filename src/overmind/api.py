@@ -117,6 +117,12 @@ class OvermindClient:
             log.warning('overmind disabled by OVERMIND_DISABLE env variable, loading model directly')
             return fn(*args, **kwargs)
 
+        # Heuristics
+        if kwargs.get('load_in_4bit') or kwargs.get('load_in_8bit'):
+            log.warning('Does not support load_in_[48]bit for now, loading model directly')
+            return fn(*args, **kwargs)
+        # End of heuristcs
+
         self._init_client()
 
         if not self.enabled:
