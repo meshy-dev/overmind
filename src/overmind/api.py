@@ -20,7 +20,7 @@ import rpyc.utils.factory
 import torch.multiprocessing as mp
 
 # -- own --
-from .common import OvermindObjectRef
+from .common import OvermindObjectRef, key_of
 from .utils.misc import hook
 
 
@@ -34,6 +34,7 @@ class OvermindClient:
     def __init__(self):
         self.client: Any = None
         self.enabled = True
+        self._local_cache = {}
 
     def _is_client_ok(self):
         if not self.client:
@@ -112,22 +113,7 @@ class OvermindClient:
         else:
             return obj
 
-    def load(self, fn, *args, **kwargs):
-        if os.environ.get('OVERMIND_DISABLE'):
-            log.warning('overmind disabled by OVERMIND_DISABLE env variable, loading model directly')
-            return fn(*args, **kwargs)
-
-        # Heuristics
-        if kwargs.get('load_in_4bit') or kwargs.get('load_in_8bit'):
-            log.warning('Does not support load_in_[48]bit for now, loading model directly')
-            return fn(*args, **kwargs)
-        # End of heuristcs
-
-        self._init_client()
-
-        if not self.enabled:
-            return fn(*args, **kwargs)
-
+    def _coalesce_to_kwargs(self, fn, args, kwargs):
         s = inspect.signature(fn)
         bs = s.bind(*args, **kwargs)
         kwargs = bs.arguments
@@ -136,6 +122,36 @@ class OvermindClient:
             if s.parameters[k].kind == inspect.Parameter.VAR_KEYWORD:
                 kwargs.update(kwargs.pop(k))
                 break
+
+        return kwargs
+
+    def _local_cached_load(self, fn, kwargs):
+        if os.environ.get('OVERMIND_NO_LOCAL_CACHE'):
+            return fn(**kwargs)
+
+        key = key_of(fn, kwargs)
+        if key in self._local_cache:
+            return self._local_cache[key]
+        self._local_cache[key] = ret = fn(**kwargs)
+        return ret
+
+    def load(self, fn, *args, **kwargs):
+        kwargs = self._coalesce_to_kwargs(fn, args, kwargs)
+
+        if os.environ.get('OVERMIND_DISABLE'):
+            log.warning('overmind disabled by OVERMIND_DISABLE env variable, loading model directly')
+            return self._local_cached_load(fn, kwargs)
+
+        # Heuristics
+        if kwargs.get('load_in_4bit') or kwargs.get('load_in_8bit'):
+            log.warning('Does not support load_in_[48]bit for now, loading model directly')
+            return self._local_cached_load(fn, kwargs)
+        # End of heuristcs
+
+        if not self.enabled:
+            return self._local_cached_load(fn, kwargs)
+
+        self._init_client()
 
         if isinstance(fn, types.FunctionType):
             # This makes pickle happy

@@ -19,7 +19,7 @@ from rpyc.utils.server import ThreadedServer
 import rpyc.core.protocol
 
 # -- own --
-from .common import OvermindObjectRef
+from .common import OvermindObjectRef, key_of, display_of
 
 
 # -- code --
@@ -40,19 +40,6 @@ class OvermindService(rpyc.Service):
     def exposed_ping(self):
         return 'pong'
 
-    def _deepfreeze(self, v):
-        if isinstance(v, list):
-            return tuple(self._deepfreeze(i) for i in v)
-        elif isinstance(v, dict):
-            return tuple(
-                (self._deepfreeze(k), self._deepfreeze(v))
-                for k, v in v.items()
-            )
-        elif hasattr(v, '__dataclass_fields__'):
-            return dataclasses.astuple(v)
-        else:
-            return v
-
     def exposed_load(self, pickled):
         import torch
 
@@ -64,10 +51,8 @@ class OvermindService(rpyc.Service):
         else:
             fn = v
 
-        print('1', kwargs)
-        key = (fn, self._deepfreeze(kwargs))
-        disp = self._disp_of(fn, kwargs)
-        print('2', kwargs)
+        key = key_of(fn, kwargs)
+        disp = display_of(fn, kwargs)
 
         # Heuristics:
         if 'device' in kwargs and kwargs.get('device') not in ('cpu', torch.device('cpu')):
@@ -122,21 +107,6 @@ class OvermindService(rpyc.Service):
             return self._models_byref[str(obj)]
         else:
             return obj
-
-    def _disp_of(self, fn, kwargs):
-        if isinstance(fn, types.MethodType):
-            if isinstance(fn.__self__, type):
-                ty = fn.__self__
-            else:
-                ty = type(fn.__self__)
-            fndisp = f'{ty.__module__}.{ty.__name__}.{fn.__name__}'
-        else:
-            fndisp = f'{fn.__module__}.{fn.__name__}'
-
-        args_disp = [f'{k}={repr(v)}' for k, v in kwargs.items()]
-
-        disp = f'{fndisp}({", ".join(args_disp)})'
-        return disp
 
 
 def main():
