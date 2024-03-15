@@ -6,6 +6,7 @@ import argparse
 import logging
 import multiprocessing.reduction
 import importlib
+import dataclasses
 import os
 import threading
 import time
@@ -14,7 +15,6 @@ import uuid
 
 # -- third party --
 from daemonize import Daemonize
-from frozendict import deepfreeze
 from rpyc.utils.server import ThreadedServer
 import rpyc.core.protocol
 
@@ -40,6 +40,19 @@ class OvermindService(rpyc.Service):
     def exposed_ping(self):
         return 'pong'
 
+    def _deepfreeze(self, v):
+        if isinstance(v, list):
+            return tuple(self._deepfreeze(i) for i in v)
+        elif isinstance(v, dict):
+            return tuple(
+                (self._deepfreeze(k), self._deepfreeze(v))
+                for k, v in v.items()
+            )
+        elif hasattr(v, '__dataclass_fields__'):
+            return dataclasses.astuple(v)
+        else:
+            return v
+
     def exposed_load(self, pickled):
         import torch
 
@@ -51,8 +64,10 @@ class OvermindService(rpyc.Service):
         else:
             fn = v
 
-        key = (fn, deepfreeze(kwargs))
+        print('1', kwargs)
+        key = (fn, self._deepfreeze(kwargs))
         disp = self._disp_of(fn, kwargs)
+        print('2', kwargs)
 
         # Heuristics:
         if 'device' in kwargs and kwargs.get('device') not in ('cpu', torch.device('cpu')):

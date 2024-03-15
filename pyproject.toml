@@ -7,7 +7,6 @@ authors = [
 ]
 dependencies = [
     "rpyc>=6.0.0",
-    "frozendict>=2.4.0",
     "daemonize>=2.5.0",
 ]
 requires-python = ">=3.8"
