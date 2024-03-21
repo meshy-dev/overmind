@@ -1,34 +1,32 @@
 # -*- coding: utf-8 -*-
 
 # -- stdlib --
+from multiprocessing.connection import Connection, Listener
+from multiprocessing.pool import ThreadPool
 from pathlib import Path
+import sys
 import argparse
+import importlib
 import logging
 import multiprocessing.reduction
-import importlib
-import dataclasses
 import os
 import threading
 import time
-import types
+import traceback
 import uuid
 
 # -- third party --
-from daemonize import Daemonize
-from rpyc.utils.server import ThreadedServer
-import rpyc.core.protocol
 
 # -- own --
-from .common import OvermindObjectRef, key_of, display_of
+from .common import OvermindEnv, OvermindObjectRef, ServiceExceptionInfo, display_of, key_of
 
 
 # -- code --
 Pickler = multiprocessing.reduction.ForkingPickler
 log = logging.getLogger('overmind.server')
-rpyc.core.protocol.DEFAULT_CONFIG['sync_request_timeout'] = 900
 
 
-class OvermindService(rpyc.Service):
+class OvermindService:
 
     def __init__(self):
         super().__init__()
@@ -40,10 +38,9 @@ class OvermindService(rpyc.Service):
     def exposed_ping(self):
         return 'pong'
 
-    def exposed_load(self, pickled):
+    def exposed_load(self, v, kwargs):
         import torch
 
-        v, kwargs = Pickler.loads(pickled)
         if isinstance(v, tuple):
             # This makes pickle happy
             m, n = v
@@ -109,16 +106,46 @@ class OvermindService(rpyc.Service):
             return obj
 
 
+class ThreadedServer:
+
+    def __init__(self, service):
+        self.service = service
+        self.pool = ThreadPool(16)
+
+    def run(self):
+        omenv = OvermindEnv.get()
+        listener = Listener(omenv.comm_endpoint)
+        log.info('Overmind server started at %s', omenv.comm_endpoint.replace("\x00", "@"))
+        while True:
+            client = listener.accept()
+            self.pool.apply_async(self._serve, [client])
+
+    def _serve(self, client: Connection):
+        try:
+            while True:
+                fn, args, kwargs = client.recv()
+                f = getattr(self.service, f'exposed_{fn}')
+                try:
+                    ret = f(*args, **kwargs)
+                except Exception as e:
+                    log.exception(f'Error calling {fn}')
+                    text = traceback.format_exc()
+                    client.send(ServiceExceptionInfo(type=type(e), desc=str(e), traceback=text))
+                    continue
+
+                client.send(ret)
+        except (EOFError, OSError):
+            pass
+        except Exception:
+            log.exception('Serve error')
+
+
 def main():
     import torch.multiprocessing as mp
 
     mp.set_sharing_strategy('file_system')
-    sock = Path('/tmp/overmind.sock')
-    if sock.exists():
-        sock.unlink()
-
-    server = ThreadedServer(OvermindService(), socket_path=str(sock), logger=logging.getLogger('rpyc'))
-    server.start()
+    server = ThreadedServer(OvermindService())
+    server.run()
 
 
 def daemon_main():
@@ -135,12 +162,15 @@ def start():
     from overmind.utils.log import init as init_log
 
     os.environ['CUDA_VISIBLE_DEVICES'] = ''
+    omenv = OvermindEnv.get()
 
     if options.daemon:
-        pid = Path('/tmp/overmind.pid')
+        assert sys.platform == 'linux'
+        from daemonize import Daemonize
+        pid = Path(f'/tmp/overmind.{omenv.venv_hash}.pid')
         if pid.exists():
             pid.unlink()
-        daemon = Daemonize(app="overmind", pid="/tmp/overmind.pid", action=daemon_main, logger=logging.getLogger('daemonize'))
+        daemon = Daemonize(app="overmind", pid=str(pid), action=daemon_main, logger=logging.getLogger('daemonize'))
         daemon.start()
     elif options.fork:
         if os.fork():

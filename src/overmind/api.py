@@ -2,6 +2,7 @@
 
 # -- stdlib --
 from functools import lru_cache
+from multiprocessing.connection import Client
 from multiprocessing.reduction import ForkingPickler as Pickler
 from pathlib import Path
 from typing import Any
@@ -11,22 +12,20 @@ import inspect
 import logging
 import os
 import sys
+import threading
 import time
 import types
 
 # -- third party --
-import rpyc.core.protocol
-import rpyc.utils.factory
 import torch.multiprocessing as mp
 
 # -- own --
-from .common import OvermindObjectRef, key_of
+from .common import OvermindEnv, OvermindObjectRef, ServiceExceptionInfo, key_of
 from .utils.misc import hook
 
 
 # -- code --
 log = logging.getLogger('overmind.api')
-rpyc.core.protocol.DEFAULT_CONFIG['sync_request_timeout'] = 900
 
 
 class OvermindClient:
@@ -35,20 +34,33 @@ class OvermindClient:
         self.client: Any = None
         self.enabled = True
         self._local_cache = {}
+        self._client_lock = threading.Lock()
+
+    def _call(self, fn, *args, **kwargs):
+        if not self.client:
+            raise Exception('Not connected')
+
+        with self._client_lock:
+            self.client.send((fn, args, kwargs))
+            ret = self.client.recv()
+            if isinstance(ret, ServiceExceptionInfo):
+                raise ret.to_exception()
+
+        return ret
 
     def _is_client_ok(self):
         if not self.client:
             return False
 
         try:
-            return self.client.root.ping() == 'pong'
+            return self._call('ping') == 'pong'
         except Exception:
             return False
 
     def _try_connect(self):
         try:
             log.debug('Try connecting to overmind server...')
-            self.client = rpyc.utils.factory.unix_connect('/tmp/overmind.sock')
+            self.client = Client(OvermindEnv.get().comm_endpoint)
         except Exception:
             pass
 
@@ -64,12 +76,21 @@ class OvermindClient:
         if self._is_client_ok():
             return
 
-        if sys.platform == 'win32':
-            log.warning('Overmind server will not auto start on Windows, please start it manually. Falling back to local mode.')
-            self.enabled = False
-            return
+        omenv = OvermindEnv.get()
 
-        with open('/tmp/overmind.lock', 'w') as lockf:
+        if sys.platform == 'win32':
+            from .utils.win32mutex import Win32Mutex
+            mutex = Win32Mutex(omenv.lock_path)
+            while True:
+                if mutex.acquire():
+                    break
+                time.sleep(0.3)
+                self._try_connect()
+                if self._is_client_ok():
+                    mutex.release()
+                    return
+        else:
+            lockf = open(omenv.lock_path, 'w')
             while True:
                 try:
                     import fcntl
@@ -80,14 +101,16 @@ class OvermindClient:
                     time.sleep(0.3)
                     self._try_connect()
                     if self._is_client_ok():
+                        lockf.close()
                         return
 
+        try:
             self._try_connect()
             if self._is_client_ok():
                 return
 
-            log.debug(f'[pid {os.getpid()}] Starting overmind server as daemon...')
-            mode = ('daemon', 'fork')[os.isatty(1)]
+            mode = ('daemon', 'fork')[os.isatty(1) and sys.platform == 'linux']
+            log.debug(f'[pid {os.getpid()}] Starting overmind server as {mode}...')
             # if os.system(f'{sys.executable} -m overmind.server --daemon') != 0:
             if os.system(f'overmind-server --{mode}') != 0:
                 raise RuntimeError('Failed to start overmind server')
@@ -99,6 +122,11 @@ class OvermindClient:
                     return
             else:
                 log.error('Failed to spawn overmind server')
+        finally:
+            if sys.platform == 'win32':
+                mutex.release()
+            else:
+                lockf.close()
 
         log.warning('Could not connect to overmind server, falling back to local mode')
         self.enabled = False
@@ -157,9 +185,9 @@ class OvermindClient:
             # This makes pickle happy
             fn = (fn.__module__, fn.__name__)
 
-        payload = self._convert_to_refs((fn, kwargs))
+        fn, kwargs = self._convert_to_refs((fn, kwargs))
 
-        b: bytes = self.client.root.load(bytes(Pickler.dumps(payload)))
+        b: bytes = self._call('load', fn, kwargs)
         return Pickler.loads(b)
 
 

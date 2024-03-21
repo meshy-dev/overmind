@@ -25,9 +25,9 @@ logging.basicConfig(level=logging.DEBUG, stream=sys.stdout)
 #     "meshy/MVDream", subfolder="unet", torch_dtype=torch.float16,
 # )  # use mvdream's config for the diffusers' model
 
-ckpt_path = hf_hub_download(
-    repo_id="ashawkey/LGM", filename="model_fp16.safetensors"
-)
+# ckpt_path = hf_hub_download(
+#     repo_id="ashawkey/LGM", filename="model_fp16.safetensors"
+# )
 
 from overmind.api import load
 from huggingface_hub import hf_hub_download

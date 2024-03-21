@@ -1,5 +1,42 @@
-import types
+# -*- coding: utf-8 -*-
+
+# -- stdlib --
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+import base64
 import dataclasses
+import hashlib
+import sys
+import tempfile
+import types
+
+# -- third party --
+# -- own --
+
+# -- code --
+class ServiceException(Exception):
+    def __init__(self, info):
+        super().__init__()
+        self.type = info.type
+        self.desc = info.desc
+        self.traceback = info.traceback
+
+    def __str__(self):
+        return (
+            f'{self.desc}\n\n'
+            '===== Remote Traceback =====\n\n'
+        ) +  self.traceback
+
+
+@dataclass
+class ServiceExceptionInfo:
+    type: type
+    desc: str
+    traceback: str
+
+    def to_exception(self):
+        return ServiceException(self)
 
 
 class OvermindObjectRef(str):
@@ -38,6 +75,36 @@ def display_of(fn, kwargs):
         disp = f'{fndisp}({", ".join(args_disp)})'
         return disp
 
-
 def key_of(fn, kwargs):
     return (fn, _deepfreeze(kwargs))
+
+
+
+@dataclass
+class OvermindEnv:
+    venv_hash: str
+    comm_endpoint: str
+    log_path: str
+    lock_path: str
+
+    @staticmethod
+    @lru_cache(1)
+    def get() -> 'OvermindEnv':
+        venv_hash = hashlib.sha1(sys.prefix.encode('utf-8')).digest()
+        venv_hash = base64.b32encode(venv_hash)[:10].decode('utf-8')
+
+        if sys.platform == 'win32':
+            tmpdir = Path(tempfile.gettempdir())
+            return OvermindEnv(
+                venv_hash=venv_hash,
+                comm_endpoint=f'\\\\.\\pipe\\Overmind.{venv_hash}',
+                log_path=str(tmpdir / f'overmind.{venv_hash}.log'),
+                lock_path='Overmind.Mutex.{venv_hash}',
+            )
+        else:
+            return OvermindEnv(
+                venv_hash=venv_hash,
+                comm_endpoint=f'\x00overmind.{venv_hash}',
+                log_path=f'/tmp/overmind.{venv_hash}.log',
+                lock_path=f'/tmp/overmind.{venv_hash}.lock',
+            )

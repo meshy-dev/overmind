@@ -6,7 +6,6 @@ authors = [
     {name = "Proton", email = "feisuzhu@163.com"},
 ]
 dependencies = [
-    "rpyc>=6.0.0",
     "daemonize>=2.5.0",
 ]
 requires-python = ">=3.8"
