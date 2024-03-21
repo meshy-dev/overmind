@@ -109,11 +109,15 @@ class OvermindClient:
             if self._is_client_ok():
                 return
 
-            mode = ('daemon', 'fork')[os.isatty(1) and sys.platform == 'linux']
-            log.debug(f'[pid {os.getpid()}] Starting overmind server as {mode}...')
             # if os.system(f'{sys.executable} -m overmind.server --daemon') != 0:
-            if os.system(f'overmind-server --{mode}') != 0:
-                raise RuntimeError('Failed to start overmind server')
+            if sys.platform == 'win32':
+                log.debug(f'[pid {os.getpid()}] Starting overmind server...')
+                os.startfile('overmind-server')
+            else:
+                mode = ('daemon', 'fork')[os.isatty(1)]
+                log.debug(f'[pid {os.getpid()}] Starting overmind server as {mode}...')
+                if os.system(f'overmind-server --{mode}') != 0:
+                    raise RuntimeError('Failed to start overmind server')
 
             for _ in range(5):
                 time.sleep(1)
