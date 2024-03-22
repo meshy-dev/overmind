@@ -92,6 +92,10 @@ class OvermindService:
         self._models_byref.clear()
         self._models_disp.clear()
 
+    def exposed_shutdown(self):
+        log.info('!! Bye')
+        os._exit(0)
+
     def exposed_list_loaded(self):
         return self._models_disp
 
