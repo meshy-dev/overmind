@@ -25,6 +25,8 @@ from .utils.misc import hook
 
 
 # -- code --
+IN_OVERMIND_SERVER = False
+
 log = logging.getLogger('overmind.api')
 
 
@@ -145,43 +147,29 @@ class OvermindClient:
         else:
             return obj
 
-    def _coalesce_to_kwargs(self, fn, args, kwargs):
-        s = inspect.signature(fn)
-        bs = s.bind(*args, **kwargs)
-        kwargs = bs.arguments
-
-        for k in kwargs:
-            if s.parameters[k].kind == inspect.Parameter.VAR_KEYWORD:
-                kwargs.update(kwargs.pop(k))
-                break
-
-        return kwargs
-
-    def _local_cached_load(self, fn, kwargs):
+    def _local_cached_load(self, fn, args, kwargs):
         if os.environ.get('OVERMIND_NO_LOCAL_CACHE'):
-            return fn(**kwargs)
+            return fn(*args, **kwargs)
 
-        key = key_of(fn, kwargs)
+        key = key_of(fn, args, kwargs)
         if key in self._local_cache:
             return self._local_cache[key]
-        self._local_cache[key] = ret = fn(**kwargs)
+        self._local_cache[key] = ret = fn(*args, **kwargs)
         return ret
 
     def load(self, fn, *args, **kwargs):
-        kwargs = self._coalesce_to_kwargs(fn, args, kwargs)
-
         if os.environ.get('OVERMIND_DISABLE'):
             log.warning('overmind disabled by OVERMIND_DISABLE env variable, loading model directly')
-            return self._local_cached_load(fn, kwargs)
+            return self._local_cached_load(fn, args, kwargs)
 
         # Heuristics
         if kwargs.get('load_in_4bit') or kwargs.get('load_in_8bit'):
             log.warning('Does not support load_in_[48]bit for now, loading model directly')
-            return self._local_cached_load(fn, kwargs)
+            return self._local_cached_load(fn, args, kwargs)
         # End of heuristcs
 
         if not self.enabled:
-            return self._local_cached_load(fn, kwargs)
+            return self._local_cached_load(fn, args, kwargs)
 
         self._init_client()
 
@@ -189,9 +177,9 @@ class OvermindClient:
             # This makes pickle happy
             fn = (fn.__module__, fn.__name__)
 
-        fn, kwargs = self._convert_to_refs((fn, kwargs))
+        fn, args, kwargs = self._convert_to_refs((fn, args, kwargs))
 
-        b: bytes = self._call('load', fn, kwargs)
+        b: bytes = self._call('load', fn, args, kwargs)
         return Pickler.loads(b)
 
 
@@ -200,6 +188,9 @@ load = om.load
 
 
 def monkey_patch(modulename, clsname, method):
+    if IN_OVERMIND_SERVER:
+        return
+
     if os.environ.get('OVERMIND_DISABLE'):
         return
 
@@ -218,6 +209,9 @@ def monkey_patch(modulename, clsname, method):
 
 
 def monkey_patch_torch_load():
+    if IN_OVERMIND_SERVER:
+        return
+
     import torch
 
     def hook_load(orig, f, map_location=None, **kwargs):
@@ -236,6 +230,9 @@ def monkey_patch_torch_load():
 
 @lru_cache(1)
 def monkey_patch_all():
+    if IN_OVERMIND_SERVER:
+        return
+
     if os.environ.get('OVERMIND_DISABLE'):
         log.warning('overmind disabled by OVERMIND_DISABLE env variable, not monkey patching')
         return

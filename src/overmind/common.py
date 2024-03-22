@@ -7,6 +7,7 @@ from pathlib import Path
 import base64
 import dataclasses
 import hashlib
+import inspect
 import sys
 import tempfile
 import types
@@ -60,24 +61,33 @@ def _deepfreeze(v):
         return v
 
 
-def display_of(fn, kwargs):
-        if isinstance(fn, types.MethodType):
-            if isinstance(fn.__self__, type):
-                ty = fn.__self__
-            else:
-                ty = type(fn.__self__)
-            fndisp = f'{ty.__module__}.{ty.__name__}.{fn.__name__}'
+def display_of(fn, args, kwargs):
+    if isinstance(fn, types.MethodType):
+        if isinstance(fn.__self__, type):
+            ty = fn.__self__
         else:
-            fndisp = f'{fn.__module__}.{fn.__name__}'
+            ty = type(fn.__self__)
+        fndisp = f'{ty.__module__}.{ty.__name__}.{fn.__name__}'
+    else:
+        fndisp = f'{fn.__module__}.{fn.__name__}'
 
-        args_disp = [f'{k}={repr(v)}' for k, v in kwargs.items()]
+    args_disp = [repr(v) for v in args]
+    kwargs_disp = [f'{k}={repr(v)}' for k, v in kwargs.items()]
 
-        disp = f'{fndisp}({", ".join(args_disp)})'
-        return disp
+    disp = f'{fndisp}({", ".join(args_disp + kwargs_disp)})'
+    return disp
 
-def key_of(fn, kwargs):
+
+def _coalesce_to_kwargs(fn, args, kwargs):
+    s = inspect.signature(fn)
+    bs = s.bind(*args, **kwargs)
+    kwargs = bs.arguments
+    return kwargs
+
+
+def key_of(fn, args, kwargs):
+    kwargs = _coalesce_to_kwargs(fn, args, kwargs)
     return (fn, _deepfreeze(kwargs))
-
 
 
 @dataclass

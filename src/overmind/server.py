@@ -38,7 +38,7 @@ class OvermindService:
     def exposed_ping(self):
         return 'pong'
 
-    def exposed_load(self, v, kwargs):
+    def exposed_load(self, v, args, kwargs):
         import torch
 
         if isinstance(v, tuple):
@@ -48,8 +48,8 @@ class OvermindService:
         else:
             fn = v
 
-        key = key_of(fn, kwargs)
-        disp = display_of(fn, kwargs)
+        key = key_of(fn, args, kwargs)
+        disp = display_of(fn, args, kwargs)
 
         # Heuristics:
         if 'device' in kwargs and kwargs.get('device') not in ('cpu', torch.device('cpu')):
@@ -70,7 +70,7 @@ class OvermindService:
             kwargs = self._convert_refs(kwargs)
             log.info('Cold load model %s', disp)
             b4 = time.time()
-            model = fn(**kwargs)
+            model = fn(*args, **kwargs)
             log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
             self._models[key] = model
             rid = str(uuid.uuid4())
@@ -163,7 +163,10 @@ def start():
     parser.add_argument('--daemon', action='store_true')
     parser.add_argument('--fork', action='store_true')
     options = parser.parse_args()
+
     from overmind.utils.log import init as init_log
+    import overmind.api
+    overmind.api.IN_OVERMIND_SERVER = True
 
     os.environ['CUDA_VISIBLE_DEVICES'] = ''
     omenv = OvermindEnv.get()
