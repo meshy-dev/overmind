@@ -200,6 +200,9 @@ load = om.load
 
 
 def monkey_patch(modulename, clsname, method):
+    if os.environ.get('OVERMIND_DISABLE'):
+        return
+
     try:
         module = importlib.import_module(modulename)
         if clsname is None:
