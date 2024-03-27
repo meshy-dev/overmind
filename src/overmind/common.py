@@ -28,7 +28,7 @@ class ServiceException(Exception):
 
     def __str__(self):
         return (
-            f'{self.desc}\n\n'
+            f'Remote server encountered something wrong\n\n'
             '===== Remote Traceback =====\n\n'
         ) +  self.traceback
 

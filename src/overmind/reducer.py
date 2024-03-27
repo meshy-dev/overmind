@@ -2,15 +2,14 @@
 
 # -- stdlib --
 from multiprocessing.reduction import ForkingPickler
+from typing import TYPE_CHECKING
 
 # -- third party --
 # -- own --
 from .shmem import SharedMemory
-from overmind.server import OvermindService
-
 
 # -- code --
-current_service: OvermindService | None = None
+current_service = None
 
 
 class SharedMemoryView:
@@ -32,7 +31,6 @@ def rebuild_memoryview_on_client(v: bytes | SharedMemoryView):
 
 
 def rebuild_memoryview_on_server(v: bytes):
-    print('rebuild server', v)
     return memoryview(v)
 
 

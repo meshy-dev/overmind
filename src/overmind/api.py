@@ -60,7 +60,8 @@ class OvermindClient:
     def _try_connect(self):
         try:
             log.debug('Try connecting to overmind server...')
-            self.client = Client(OvermindEnv.get().comm_endpoint)
+            e = OvermindEnv.get()
+            self.client = Client(e.comm_endpoint, authkey=e.venv_hash.encode('utf-8'))
         except Exception:
             pass
 

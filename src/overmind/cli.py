@@ -12,8 +12,8 @@ from .common import OvermindEnv
 # -- code --
 def _init_client():
     try:
-        comm = OvermindEnv.get().comm_endpoint
-        return Client(comm, authkey=comm.encode('utf-8'))
+        e = OvermindEnv.get()
+        return Client(e.comm_endpoint, authkey=e.venv_hash.encode('utf-8'))
     except Exception:
         print('Overmind seems not started')
         sys.exit(0)

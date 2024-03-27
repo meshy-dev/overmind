@@ -117,7 +117,7 @@ class ThreadedServer:
 
     def run(self):
         omenv = OvermindEnv.get()
-        listener = Listener(omenv.comm_endpoint, authkey=omenv.comm_endpoint.encode('utf-8'))
+        listener = Listener(omenv.comm_endpoint, authkey=omenv.venv_hash.encode('utf-8'))
         log.info('Overmind server started at %s', omenv.comm_endpoint.replace("\x00", "@"))
         while True:
             client = listener.accept()
