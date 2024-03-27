@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 import importlib
 import importlib.util
-import inspect
 import logging
 import os
 import sys
@@ -20,13 +19,12 @@ import types
 import torch.multiprocessing as mp
 
 # -- own --
+from . import common
 from .common import OvermindEnv, OvermindObjectRef, ServiceExceptionInfo, key_of
 from .utils.misc import hook
 
 
 # -- code --
-IN_OVERMIND_SERVER = False
-
 log = logging.getLogger('overmind.api')
 
 
@@ -188,7 +186,7 @@ load = om.load
 
 
 def monkey_patch(modulename, clsname, method):
-    if IN_OVERMIND_SERVER:
+    if common.IN_OVERMIND_SERVER:
         return
 
     if os.environ.get('OVERMIND_DISABLE'):
@@ -209,7 +207,7 @@ def monkey_patch(modulename, clsname, method):
 
 
 def monkey_patch_torch_load():
-    if IN_OVERMIND_SERVER:
+    if common.IN_OVERMIND_SERVER:
         return
 
     import torch
@@ -230,7 +228,7 @@ def monkey_patch_torch_load():
 
 @lru_cache(1)
 def monkey_patch_all():
-    if IN_OVERMIND_SERVER:
+    if common.IN_OVERMIND_SERVER:
         return
 
     if os.environ.get('OVERMIND_DISABLE'):
@@ -276,6 +274,8 @@ def apply_quirks():
 def _init():
     mp.set_sharing_strategy('file_system')
     apply_quirks()
+    from .reducer import init_reductions_client
+    init_reductions_client()
 
 
 _init()

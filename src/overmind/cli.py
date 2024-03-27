@@ -12,15 +12,11 @@ from .common import OvermindEnv
 # -- code --
 def _init_client():
     try:
-       return Client(OvermindEnv.get().comm_endpoint)
+        comm = OvermindEnv.get().comm_endpoint
+        return Client(comm, authkey=comm.encode('utf-8'))
     except Exception:
         print('Overmind seems not started')
         sys.exit(0)
-
-
-def reset():
-    cli = _init_client()
-    cli.send(('reset', (), {}))
 
 
 def list_loaded():

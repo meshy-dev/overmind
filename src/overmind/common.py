@@ -16,6 +16,9 @@ import types
 # -- own --
 
 # -- code --
+IN_OVERMIND_SERVER = False
+
+
 class ServiceException(Exception):
     def __init__(self, info):
         super().__init__()

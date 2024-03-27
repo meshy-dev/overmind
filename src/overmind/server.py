@@ -18,6 +18,7 @@ import uuid
 # -- third party --
 
 # -- own --
+from . import reducer
 from .common import OvermindEnv, OvermindObjectRef, ServiceExceptionInfo, display_of, key_of
 
 
@@ -34,6 +35,10 @@ class OvermindService:
         self._models_byref = {}
         self._models_disp = []  # solely for debugging
         self._loading = threading.Lock()
+        self._tracked_memoryviews = {}
+        self._tracked_wrapped = {}
+
+        reducer.current_service = self
 
     def exposed_ping(self):
         return 'pong'
@@ -86,12 +91,6 @@ class OvermindService:
             log.info(f'Will send {len(data)} bytes')
             return data
 
-    def exposed_reset(self):
-        log.info('!! Reset cache')
-        self._models.clear()
-        self._models_byref.clear()
-        self._models_disp.clear()
-
     def exposed_shutdown(self):
         log.info('!! Bye')
         os._exit(0)
@@ -118,7 +117,7 @@ class ThreadedServer:
 
     def run(self):
         omenv = OvermindEnv.get()
-        listener = Listener(omenv.comm_endpoint)
+        listener = Listener(omenv.comm_endpoint, authkey=omenv.comm_endpoint.encode('utf-8'))
         log.info('Overmind server started at %s', omenv.comm_endpoint.replace("\x00", "@"))
         while True:
             client = listener.accept()
@@ -165,8 +164,12 @@ def start():
     options = parser.parse_args()
 
     from overmind.utils.log import init as init_log
-    import overmind.api
-    overmind.api.IN_OVERMIND_SERVER = True
+
+    import overmind.common
+    overmind.common.IN_OVERMIND_SERVER = True
+
+    import overmind.reducer
+    overmind.reducer.init_reductions_server()
 
     os.environ['CUDA_VISIBLE_DEVICES'] = ''
     omenv = OvermindEnv.get()
