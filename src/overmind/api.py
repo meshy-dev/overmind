@@ -273,10 +273,12 @@ def apply_quirks():
 
 
 def _init():
+    if common.IN_OVERMIND_SERVER is True:
+        return
+    common.IN_OVERMIND_SERVER = False
     mp.set_sharing_strategy('file_system')
     apply_quirks()
     from .reducer import init_reductions_client
     init_reductions_client()
-
 
 _init()

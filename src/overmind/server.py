@@ -1,22 +1,20 @@
-# -*- coding: utf-8 -*-
 
 # -- stdlib --
 from multiprocessing.connection import Connection, Listener
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
-import sys
 import argparse
 import importlib
 import logging
-import multiprocessing.reduction
 import os
+import sys
+import multiprocessing.reduction
 import threading
 import time
 import traceback
 import uuid
 
 # -- third party --
-
 # -- own --
 from . import reducer
 from .common import OvermindEnv, OvermindObjectRef, ServiceExceptionInfo, display_of, key_of
@@ -76,6 +74,7 @@ class OvermindService:
             log.info('Cold load model %s', disp)
             b4 = time.time()
             model = fn(*args, **kwargs)
+            model = self._transform(model)
             log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
             self._models[key] = model
             rid = str(uuid.uuid4())
@@ -91,12 +90,57 @@ class OvermindService:
             log.info(f'Will send {len(data)} bytes')
             return data
 
+    def _transform(self, model):
+        model = self._set_no_grad(model)
+        model = self._move_torch_module_to_cpu(model)
+        return model
+
+    def _set_no_grad(self, model):
+        import torch
+        if not isinstance(model, torch.nn.Module):
+            return model
+
+        for p in model.parameters():
+            p.requires_grad = False
+
+        return model
+
+    def _move_torch_module_to_cpu(self, model):
+        import torch
+
+        if not isinstance(model, torch.nn.Module):
+            return model
+
+        st = model.state_dict(keep_vars=True)
+        state_dev_map = {k: v.device for k, v in st.items()}
+        if (dev := set(state_dev_map.values())) != {torch.device('cpu')}:
+            st = {k: v.to('cpu') for k, v in st.items()}
+
+            # Remove accelerate added warning hooks (interferes pickling)
+            # from accelerate.hooks import remove_hook_from_module
+            # remove_hook_from_module(model, True)
+            model.__dict__.pop('to', None)
+            model.__dict__.pop('cuda', None)
+            model.__dict__.pop('xpu', None)
+            model.__dict__.pop('npu', None)
+
+            model.load_state_dict(st, assign=True)
+            # ---------
+
+            return reducer.RebuildTorchModuleOnClient(model, state_dev_map)
+
+        return model
+
     def exposed_shutdown(self):
         log.info('!! Bye')
         os._exit(0)
 
     def exposed_list_loaded(self):
         return self._models_disp
+
+    def exposed_drop_shell(self):
+        import IPython
+        IPython.embed()
 
     def _convert_refs(self, obj):
         if isinstance(obj, (list, tuple)):
@@ -158,15 +202,16 @@ def daemon_main():
 
 
 def start():
+    from . import common
+    assert common.IN_OVERMIND_SERVER is None, 'Should not import both client and server'
+    common.IN_OVERMIND_SERVER = True
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--daemon', action='store_true')
     parser.add_argument('--fork', action='store_true')
     options = parser.parse_args()
 
     from overmind.utils.log import init as init_log
-
-    import overmind.common
-    overmind.common.IN_OVERMIND_SERVER = True
 
     import overmind.reducer
     overmind.reducer.init_reductions_server()

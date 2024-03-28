@@ -16,6 +16,7 @@ license = {text = "Apache"}
 overmind-server = "overmind.server:start"
 overmind-list = "overmind.cli:list_loaded"
 overmind-shutdown= "overmind.cli:shutdown"
+overmind-drop-shell= "overmind.cli:drop_shell"
 
 [build-system]
 requires = ["pdm-backend"]

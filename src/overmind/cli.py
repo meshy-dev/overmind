@@ -26,6 +26,11 @@ def list_loaded():
     for i in l:
         print(i)
 
+def drop_shell():
+    # for debugging
+    cli = _init_client()
+    cli.send(('drop_shell', (), {}))
+
 
 def shutdown():
     cli = _init_client()
