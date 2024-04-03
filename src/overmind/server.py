@@ -14,6 +14,7 @@ import time
 import traceback
 import uuid
 
+
 # -- third party --
 # -- own --
 from . import reducer
@@ -113,12 +114,18 @@ class OvermindService:
 
         st = model.state_dict(keep_vars=True)
         state_dev_map = {k: v.device for k, v in st.items()}
-        if (dev := set(state_dev_map.values())) != {torch.device('cpu')}:
-            st = {k: v.to('cpu') for k, v in st.items()}
+        if set(state_dev_map.values()) != {torch.device('cpu')}:
+            for k, v in st.items():
+                dev = v.device
+                v = v.to('cpu')
+                v._prev_device = dev
+                st[k] = v
+
+            # Remove AlignDevices hooks
+            from accelerate.hooks import remove_hook_from_module
+            remove_hook_from_module(model, True)
 
             # Remove accelerate added warning hooks (interferes pickling)
-            # from accelerate.hooks import remove_hook_from_module
-            # remove_hook_from_module(model, True)
             model.__dict__.pop('to', None)
             model.__dict__.pop('cuda', None)
             model.__dict__.pop('xpu', None)

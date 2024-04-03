@@ -78,14 +78,13 @@ def reduce_memoryview_on_server(v: memoryview):
 
 
 def _reduce_bnb_param(p):
-    state = p.__getstate__()
-    return (_rebuild_bnb_param, (type(p), state))
+    dev = p._prev_device
+    assert p.quant_state
+    return (_rebuild_bnb_param, (type(p), p.data, p.quant_state.as_dict(packed=True), dev))
 
 
-def _rebuild_bnb_param(typ, state):
-    v = typ.__new__(typ)
-    v.__setstate__(state)
-    return v
+def _rebuild_bnb_param(typ, data, qs_dict, dev):
+    return typ.from_prequantized(data, qs_dict, device=dev)
 
 
 def bitsandbytes_quirks():
