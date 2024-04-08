@@ -4,6 +4,7 @@
 from multiprocessing.connection import Connection, Listener
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
+import sys
 import argparse
 import importlib
 import logging
@@ -201,6 +202,10 @@ def main():
     import torch.multiprocessing as mp
 
     mp.set_sharing_strategy('file_system')
+
+    import overmind.reducer
+    overmind.reducer.init_reductions_server()
+
     server = ThreadedServer(OvermindService())
     server.run()
 
@@ -223,11 +228,9 @@ def start():
     options = parser.parse_args()
 
     from overmind.utils.log import init as init_log
-
-    import overmind.reducer
-    overmind.reducer.init_reductions_server()
-
     omenv = OvermindEnv.get()
+
+    assert 'torch' not in sys.modules
 
     if options.daemon:
         assert sys.platform == 'linux'
