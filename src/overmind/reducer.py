@@ -6,6 +6,7 @@ from multiprocessing.reduction import ForkingPickler
 # -- third party --
 # -- own --
 from .shmem import SharedMemory
+from .utils.misc import hook
 
 
 # -- code --
@@ -14,25 +15,36 @@ current_service = None
 
 class RebuildTorchModuleOnClient:
 
-    def __init__(self, model, state_dev_map):
+    def __init__(self, model, dev_map):
         self.model = model
-        self.state_dev_map = state_dev_map
+        self.dev_map = dev_map
 
     def __reduce__(self):
         return (
             self._rebuild,
-            (
-                self.model,
-                self.state_dev_map,
-            ),
+            (self.model, self.dev_map),
         )
 
     @staticmethod
-    def _rebuild(model, state_dev_map):
-        sdm = state_dev_map
-        st = model.state_dict(keep_vars=True)
-        st = {k: v.to(sdm[k]) for k, v in st.items()}
-        model.load_state_dict(st, strict=False, assign=True)
+    def _rebuild(model, dev_map):
+        import torch
+
+        def walk(prefix, module):
+            for n, v in module.named_parameters(prefix=prefix, recurse=False):
+                v1 = v.to(dev_map[n])
+                if type(v) is torch.nn.Parameter:
+                    v1 = torch.nn.Parameter(v1)
+
+                assert type(v) is type(v1)
+                setattr(module, n.rsplit('.')[-1], v1)
+
+            for n, v in module.named_buffers(prefix=prefix, recurse=False):
+                setattr(module, n.rsplit('.')[-1], v.to(dev_map[n]))
+
+            for n, v in module.named_children():
+                walk(n, v)
+
+        walk('', model)
         return model
 
 
@@ -78,13 +90,13 @@ def reduce_memoryview_on_server(v: memoryview):
 
 
 def _reduce_bnb_param(p):
-    dev = p._prev_device
     assert p.quant_state
-    return (_rebuild_bnb_param, (type(p), p.data, p.quant_state.as_dict(packed=True), dev))
+    qs_dict = p.quant_state.as_dict(packed=True)
+    return (_rebuild_bnb_param, (type(p), p.data, qs_dict))
 
 
-def _rebuild_bnb_param(typ, data, qs_dict, dev):
-    return typ.from_prequantized(data, qs_dict, device=dev)
+def _rebuild_bnb_param(typ, data, qs_dict):
+    return typ.from_prequantized(data, qs_dict, device='cpu')
 
 
 def bitsandbytes_quirks():
@@ -95,6 +107,11 @@ def bitsandbytes_quirks():
 
     ForkingPickler.register(bitsandbytes.nn.modules.Params4bit, _reduce_bnb_param)
     ForkingPickler.register(bitsandbytes.nn.modules.Int8Params, _reduce_bnb_param)
+
+    @hook(bitsandbytes.nn.modules.QuantState)
+    def to(orig, self, device):
+        orig(self, device)
+        self.code = self.code.to(device)
 
 
 def pytorch_pickle_quirks():

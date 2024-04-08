@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 
 # -- stdlib --
 from multiprocessing.connection import Connection, Listener
@@ -6,14 +7,13 @@ from pathlib import Path
 import argparse
 import importlib
 import logging
+import multiprocessing.reduction
 import os
 import sys
-import multiprocessing.reduction
 import threading
 import time
 import traceback
 import uuid
-
 
 # -- third party --
 # -- own --
@@ -43,8 +43,6 @@ class OvermindService:
         return 'pong'
 
     def exposed_load(self, v, args, kwargs):
-        import torch
-
         if isinstance(v, tuple):
             # This makes pickle happy
             m, n = v
@@ -54,12 +52,6 @@ class OvermindService:
 
         key = key_of(fn, args, kwargs)
         disp = display_of(fn, args, kwargs)
-
-        # Heuristics:
-        if 'device' in kwargs and kwargs.get('device') not in ('cpu', torch.device('cpu')):
-            log.error('Not caching model %s because it is not on CPU', disp)
-            raise ValueError(f'Not caching model {disp} because it is not on CPU')
-        # End of heuristics
 
         if key in self._models:
             payload = bytes(Pickler.dumps(self._models[key]))
@@ -112,31 +104,42 @@ class OvermindService:
         if not isinstance(model, torch.nn.Module):
             return model
 
-        st = model.state_dict(keep_vars=True)
-        state_dev_map = {k: v.device for k, v in st.items()}
-        if set(state_dev_map.values()) != {torch.device('cpu')}:
-            for k, v in st.items():
-                dev = v.device
-                v = v.to('cpu')
-                v._prev_device = dev
-                st[k] = v
+        dev_map = {}
 
-            # Remove AlignDevices hooks
-            from accelerate.hooks import remove_hook_from_module
-            remove_hook_from_module(model, True)
+        def walk(prefix, module):
+            for n, v in module.named_parameters(prefix=prefix, recurse=False):
+                dev_map[n] = v.device
+                v1 = v.to('cpu')
+                if type(v) is torch.nn.Parameter:
+                    v1 = torch.nn.Parameter(v1)
+                assert type(v) is type(v1)
+                setattr(module, n.rsplit('.')[-1], v1)
 
-            # Remove accelerate added warning hooks (interferes pickling)
-            model.__dict__.pop('to', None)
-            model.__dict__.pop('cuda', None)
-            model.__dict__.pop('xpu', None)
-            model.__dict__.pop('npu', None)
+            for n, v in module.named_buffers(prefix=prefix, recurse=False):
+                dev_map[n] = v.device
+                setattr(module, n.rsplit('.')[-1], v.to('cpu'))
 
-            model.load_state_dict(st, assign=True)
-            # ---------
+            for n, v in module.named_children():
+                walk(n, v)
 
-            return reducer.RebuildTorchModuleOnClient(model, state_dev_map)
+        walk('', model)
 
-        return model
+        # Remove AlignDevices hooks
+        from accelerate.hooks import remove_hook_from_module
+        remove_hook_from_module(model, True)
+
+        # Remove accelerate added warning hooks (interferes pickling)
+        model.__dict__.pop('to', None)
+        model.__dict__.pop('cuda', None)
+        model.__dict__.pop('xpu', None)
+        model.__dict__.pop('npu', None)
+
+        # Drop VRAM usage at best
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        return reducer.RebuildTorchModuleOnClient(model, dev_map)
 
     def exposed_shutdown(self):
         log.info('!! Bye')
@@ -204,7 +207,8 @@ def main():
 
 def daemon_main():
     from overmind.utils.log import init as init_log
-    init_log(logging.DEBUG, '/tmp/overmind.log')
+    omenv = OvermindEnv.get()
+    init_log(logging.DEBUG, f'/tmp/overmind.{omenv.venv_hash}.log')
     main()
 
 
@@ -223,7 +227,6 @@ def start():
     import overmind.reducer
     overmind.reducer.init_reductions_server()
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = ''
     omenv = OvermindEnv.get()
 
     if options.daemon:
@@ -238,7 +241,7 @@ def start():
         if os.fork():
             return
         os.setsid()
-        init_log(logging.DEBUG, '/tmp/overmind.log')
+        init_log(logging.DEBUG, f'/tmp/overmind.{omenv.venv_hash}.log')
         main()
     else:
         init_log(logging.DEBUG, None)
