@@ -109,8 +109,6 @@ class OvermindService:
         dev_map = {}
 
         def walk(prefix, module):
-            nonlocal pure_cpu
-
             for n, v in module.named_parameters(prefix=prefix, recurse=False):
                 dev_map[n] = v.device
                 if v.device.type == 'cpu':
