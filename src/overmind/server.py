@@ -68,15 +68,16 @@ class OvermindService:
             log.info('Cold load model %s', disp)
             b4 = time.time()
             model = fn(*args, **kwargs)
-            model = self._transform(model)
-            log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
-            self._models[key] = model
-            rid = str(uuid.uuid4())
 
+            rid = str(uuid.uuid4())
             try:
                 model._overmind_ref = rid
             except AttributeError:
                 pass
+
+            model = self._transform(model)
+            log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
+            self._models[key] = model
 
             self._models_byref[rid] = model
             self._models_disp.append(disp)
@@ -108,8 +109,12 @@ class OvermindService:
         dev_map = {}
 
         def walk(prefix, module):
+            nonlocal pure_cpu
+
             for n, v in module.named_parameters(prefix=prefix, recurse=False):
                 dev_map[n] = v.device
+                if v.device.type == 'cpu':
+                    continue
                 v1 = v.to('cpu')
                 if type(v) is torch.nn.Parameter:
                     v1 = torch.nn.Parameter(v1)
@@ -118,6 +123,8 @@ class OvermindService:
 
             for n, v in module.named_buffers(prefix=prefix, recurse=False):
                 dev_map[n] = v.device
+                if v.device.type == 'cpu':
+                    continue
                 setattr(module, n.rsplit('.')[-1], v.to('cpu'))
 
             for n, v in module.named_children():
@@ -134,6 +141,10 @@ class OvermindService:
         model.__dict__.pop('cuda', None)
         model.__dict__.pop('xpu', None)
         model.__dict__.pop('npu', None)
+
+        # Do not wrap pure CPU models
+        if set(dev_map.values()) == {torch.device("cpu")}:
+            return model
 
         # Drop VRAM usage at best
         import gc
