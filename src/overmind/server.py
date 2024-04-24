@@ -54,6 +54,50 @@ class OvermindService:
         key = key_of(fn, args, kwargs)
         disp = display_of(fn, args, kwargs)
 
+        # Heuristics:
+        import torch
+
+        while (dev := kwargs.get('device')):
+            if dev in ('cpu', 'cuda', torch.device('cpu')):
+                break
+
+            if isinstance(dev, torch.device) and dev.type == 'cuda':
+                if dev.index not in (None, 0):
+                    raise ValueError(f'Only models on cuda:0 are supported, not loading {disp}')
+
+                kwargs['device'] = torch.device('cuda:0')
+
+            break
+
+        while (dmap := kwargs.get('device_map')):
+            if dmap == 'auto':
+                if kwargs.get('load_in_4bit') or kwargs.get('load_in_8bit'):
+                    log.warning('Auto device_map is not supported, forcing cuda:0 (since 4bit/8bit quant is used)')
+                    kwargs['device_map'] = {'': torch.device('cuda:0')}
+                else:
+                    log.warning('Auto device_map is not supported, forcing cpu')
+                    kwargs.pop('device_map')
+                    kwargs['device_map'] = {'': torch.device('cpu')}
+
+                break
+
+            elif isinstance(dmap, dict) and len(dmap) == 1:
+                dev = next(iter(dmap.values()))
+
+                if dev in ('cpu', 'cuda', torch.device('cpu')):
+                    break
+
+                if isinstance(dev, torch.device) and dev.type == 'cuda':
+                    if dev.index not in (None, 0):
+                        raise ValueError(f'Only models on cuda:0 are supported, not loading {disp}')
+
+                    kwargs['device_map'] = {'': torch.device('cuda:0')}
+            else:
+                raise ValueError('Complex device_map is not supported')
+
+            break
+        # End of heuristics
+
         if key in self._models:
             payload = bytes(Pickler.dumps(self._models[key]))
             log.debug('Providing cached model %s (%s bytes over wire)', disp, len(payload))
