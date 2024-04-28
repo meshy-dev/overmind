@@ -4,6 +4,7 @@
 from multiprocessing.connection import Connection, Listener
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 import argparse
 import importlib
@@ -131,7 +132,7 @@ class OvermindService:
 
     def _transform(self, model):
         model = self._set_no_grad(model)
-        model = self._move_torch_module_to_cpu(model)
+        model = self._move_generic_thing_to_cpu(model)
         return model
 
     def _set_no_grad(self, model):
@@ -143,6 +144,43 @@ class OvermindService:
             p.requires_grad = False
 
         return model
+
+    def _move_generic_thing_to_cpu(self, model):
+        try:
+            import torch
+        except ImportError:
+            return model
+
+        seen = set()
+
+        def walk(m):
+            if id(m) in seen:
+                return m
+
+            seen.add(id(m))
+
+            if isinstance(m, torch.nn.Module):
+                m = self._move_torch_module_to_cpu(m)
+            elif isinstance(m, list):
+                for i, v in enumerate(m):
+                    m[i] = walk(v)
+            elif isinstance(m, tuple):
+                m = m.__class__(walk(v) for v in m)
+            elif isinstance(m, dict):
+                for k, v in m.items():
+                    m[k] = walk(v)
+            elif (d := getattr(m, '__dict__', None)) is not None:
+                for k, v in d.items():
+                    d[k] = walk(v)
+            elif (keys := getattr(m, '__slots__', None)) is not None:
+                for k in keys:
+                    setattr(m, k, walk(getattr(m, k)))
+
+            seen.add(id(m))  # not a duplicate, m may has changed
+
+            return m
+
+        return walk(model)
 
     def _move_torch_module_to_cpu(self, model):
         import torch
