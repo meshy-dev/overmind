@@ -239,6 +239,7 @@ def monkey_patch_all():
     monkey_patch('transformers.modeling_utils',          'PreTrainedModel',             'from_pretrained')
     monkey_patch('transformers.tokenization_utils_base', 'PreTrainedTokenizerBase',     'from_pretrained')
     monkey_patch('transformers',                         'AutoProcessor',               'from_pretrained')
+    monkey_patch('transformers',                         None,                          'pipeline')
     monkey_patch('torchvision.models.vgg',               None,                          'vgg19')
     monkey_patch('torchvision.models.vgg',               None,                          'vgg16')
     monkey_patch('open_clip',                            None,                          'create_model_and_transforms')
