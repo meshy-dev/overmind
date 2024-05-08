@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<title>reveal.js</title>
+
+		<link rel="stylesheet" href="dist/reset.css">
+		<link rel="stylesheet" href="dist/reveal.css">
+		<link rel="stylesheet" href="dist/theme/black.css">
+        <link rel="stylesheet" href="lib/css/zenburn.css">
+
+		<!-- Theme used for syntax highlighted code -->
+		<link rel="stylesheet" href="plugin/highlight/monokai.css">
+	</head>
+	<body>
+		<div class="reveal">
+			<div class="slides">
+				<section>
+                    <h2>overmind 是啥？</h2>
+                    <ul class="fragment">
+                        <li>减少模型的加载时间</li>
+                        <li>最初是为了混合部署标准的 coarse 和 lowpoly coarse</li>
+                        <li>翻 torch 的文档发现了 shared mem 于是觉得这个事可以搞</li>
+                    </ul>
+                </section>
+				<section>
+                    <h3>效果比对</h3>
+                    <p>python -m meshflow.main_mvdream --config image3d/coarse.instantngp.yaml seed=1234 input=~/gun.jpg art_style=realistic</p>
+                    <img width="45%" src="assets/with-om-cold.png">
+                    <img width="45%" src="assets/with-om.png">
+                </section>
+                <section>
+                    <h3>典型日志</h3>
+                    <p>cat /tmp/overmind.*.log</p>
+                    <img src="assets/overmind-log.png">
+                </section>
+                <section>
+                    <h3>如何使用</h3>
+                    <pre><code data-trim data-line-numbers="1-6|8-13">
+                        # Use monkey patching
+                        import overmind.api
+                        overmind.api.monkey_patch_all()
+                        pipeline = DiffusionPipeline.from_pretrained(
+                            "stabilityai/stable-diffusion-xl-refiner-1.0"
+                        )
+
+                        # ... or explicitly load
+                        from overmind.api import load
+                        pipeline = load(
+                            DiffusionPipeline.from_pretrained,
+                            "stabilityai/stable-diffusion-xl-refiner-1.0",
+                        )
+                    </code></pre>
+                </section>
+                <section>
+                    <h3>如何工作</h3>
+                    <p>(Oversimplified)</p>
+                    <ul>
+                        <li>把函数和参数都 pickle 起来，发一个 RPC 给 overmind daemon</li>
+                        <li>如果没有 overmind daemon 就拉起来一个</li>
+                        <li>在 overmind 的进程中执行发过来的函数</li>
+                        <li>把结果再 pickle 一下返回给 client</li>
+                    </ul>
+                </section>
+                <section>
+                    <h3 style="text-transform: none;">……但是要用 torch 给的 Pickler</h3>
+                    <pre><code data-trim data-line-numbers="7-9|11-14">
+                        from diffusers import DiffusionPipeline
+
+                        pipe = DiffusionPipeline.from_pretrained(
+                            "stabilityai/stable-diffusion-xl-refiner-1.0"
+                        )
+
+                        # This results a 12GB pickle, costs 14.2s
+                        import pickle
+                        pickle.dumps(pipe)
+
+                        # This results a 2.5MB pickle, costs 1.55s
+                        from torch.multiprocessing.reductions \
+                            import ForkingPickler
+                        ForkingPickler.dumps(pipe)
+                    </code></pre>
+                    <ul class="fragment">
+                        <li>torch 的 Pickler 会把 tensor 数据放到 shm 中</li>
+                        <li>ls /dev/shm 可以看到大量的 torch shm 文件</li>
+                        <li>所以 torch 的 pickle 中没有数据，但是有指向 shm 的指针</li>
+                    </ul>
+                </section>
+                <section>
+                    <h1>一些细节</h1>
+                    <p class="fragment">aka. 遇到的坑，和特别的解决方案</p>
+                </section>
+			</div>
+		</div>
+
+		<script src="dist/reveal.js"></script>
+		<script src="plugin/notes/notes.js"></script>
+		<script src="plugin/highlight/highlight.js"></script>
+		<script src="my_deps/reveal-mermaid.js"></script>
+		<script>
+			// More info about initialization & config:
+			// - https://revealjs.com/initialization/
+			// - https://revealjs.com/config/
+			Reveal.initialize({
+				hash: true,
+                controls: true,
+                progress: true,
+                center: true,
+
+				// Learn about plugins: https://revealjs.com/plugins/
+				plugins: [ RevealHighlight, RevealNotes, RevealMermaid]
+			});
+		</script>
+	</body>
+</html>
+
+<!--
+1. welcome
+2. overmind 是啥，干什么用的
+    1. 做 load 加速用
+    2. 最初是为了解决 lowpoly & refine 混合部署（快速切换模型）
+3. 如何解决了问题，效果比对
+    1. img3d cold vs hot
+4. 如何使用
+    1. do nothing
+    2. explicitly load
+5. 如何开始的，（torch shared mem）
+6. 核心原理
+    mermaid graph
+7. 遇到的坑
+    3. vae 的 pattern
+    2. diffusers dyn module
+    1. bitsandbytes
+    others
+        2. pickle quirks
+        2. socket path
+        1. feature gate (thx to ksf)
+8. 之后可能的改进
+    1. drop torch shared mem
+9. thank you
+-->
