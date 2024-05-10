@@ -2,8 +2,11 @@
 
 # -- stdlib --
 from multiprocessing.reduction import ForkingPickler
+import io
 
 # -- third party --
+import dill
+
 # -- own --
 from .shmem import SharedMemory
 from .utils.misc import hook
@@ -11,6 +14,19 @@ from .utils.misc import hook
 
 # -- code --
 current_service = None
+
+
+class OvermindPickler(dill.Pickler):
+
+    def __init__(self, file):
+        super().__init__(file)
+        self.dispatch_table = ForkingPickler(file).dispatch_table
+
+    @classmethod
+    def dumps(cls, obj):
+        buf = io.BytesIO()
+        cls(buf).dump(obj)
+        return buf.getbuffer()
 
 
 class RebuildTorchModuleOnClient:

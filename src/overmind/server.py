@@ -4,12 +4,9 @@
 from multiprocessing.connection import Connection, Listener
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
-from types import SimpleNamespace
-import sys
 import argparse
 import importlib
 import logging
-import multiprocessing.reduction
 import os
 import sys
 import threading
@@ -21,10 +18,10 @@ import uuid
 # -- own --
 from . import reducer
 from .common import OvermindEnv, OvermindObjectRef, ServiceExceptionInfo, display_of, key_of
+from .reducer import OvermindPickler
 
 
 # -- code --
-Pickler = multiprocessing.reduction.ForkingPickler
 log = logging.getLogger('overmind.server')
 
 
@@ -100,14 +97,14 @@ class OvermindService:
         # End of heuristics
 
         if key in self._models:
-            payload = bytes(Pickler.dumps(self._models[key]))
+            payload = bytes(OvermindPickler.dumps(self._models[key]))
             log.debug('Providing cached model %s (%s bytes over wire)', disp, len(payload))
             return payload
 
         with self._loading:
             if key in self._models:
                 log.debug('Providing cached model (just loaded!) %s', disp)
-                return bytes(Pickler.dumps(self._models[key]))
+                return bytes(OvermindPickler.dumps(self._models[key]))
 
             kwargs = self._convert_refs(kwargs)
             log.info('Cold load model %s', disp)
@@ -126,7 +123,7 @@ class OvermindService:
 
             self._models_byref[rid] = model
             self._models_disp.append(disp)
-            data = bytes(Pickler.dumps(self._models[key]))
+            data = bytes(OvermindPickler.dumps(self._models[key]))
             log.info(f'Will send {len(data)} bytes')
             return data
 
