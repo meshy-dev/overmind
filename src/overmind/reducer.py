@@ -2,6 +2,7 @@
 
 # -- stdlib --
 from multiprocessing.reduction import ForkingPickler
+from _thread import _local
 import io
 
 # -- third party --
@@ -136,13 +137,21 @@ def pytorch_pickle_quirks():
     forward.__name__ = 'forward'
 
 
+def thread_quirks():
+    # Assuming data in thread local is not important, just drop them
+    ForkingPickler.register(_local, lambda _: (_local, ()))
+
+
 def init_reductions_client():
     ForkingPickler.register(memoryview, reduce_memoryview_on_client)
+    thread_quirks()
     pytorch_pickle_quirks()
     bitsandbytes_quirks()
 
 
 def init_reductions_server():
     ForkingPickler.register(memoryview, reduce_memoryview_on_server)
+    ForkingPickler.register(_local, lambda _: (_local, ()))
+    thread_quirks()
     pytorch_pickle_quirks()
     bitsandbytes_quirks()
