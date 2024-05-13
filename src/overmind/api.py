@@ -218,7 +218,7 @@ def monkey_patch_torch_load():
             return orig(f, map_location, **kwargs)
 
     hook(torch, name='load')(hook_load)
-    hook(torch.jit, name='load')(hook_load)
+    # hook(torch.jit, name='load')(hook_load)  # torch.jit.load result contains lots of unpicklable objects, we can't handle it
 
 
 @lru_cache(1)

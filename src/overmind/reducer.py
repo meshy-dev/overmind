@@ -119,7 +119,7 @@ def _rebuild_bnb_param(typ, data, qs_dict):
 def bitsandbytes_quirks():
     try:
         import bitsandbytes
-    except ImportError as e:
+    except ImportError:
         return
 
     ForkingPickler.register(bitsandbytes.nn.modules.Params4bit, _reduce_bnb_param)
@@ -131,10 +131,118 @@ def bitsandbytes_quirks():
         self.code = self.code.to(device)
 
 
+class RebuildTorchJitOnClient:
+
+    def __init__(self, mod):
+        self.serialized = self.reduce_torch_jit_objects(mod)
+
+    def __reduce__(self):
+        return self.serialized
+
+    @staticmethod
+    def rebuild_torch_jit_objects(data):
+        ...  # Prevent string below to be recognized as docstring
+
+        # Flatbuffer version does not preserve device, not using it for now
+        '''
+        import torch._C
+        from torch.jit._recursive import wrap_cpp_module
+        # FIXME: data here is copied 2 times, each time cost 0.5s for a UNet model
+        # 1st copy happens here, since _load_jit_module_from_bytes will not accept memoryview objects
+        # 2nd copy happens in C++ code of _load_jit_module_from_bytes
+        data = bytes(data)
+        rst = wrap_cpp_module(torch._C._load_jit_module_from_bytes(data))
+        '''
+
+        import torch
+        rst = torch.jit.load(io.BytesIO(data))
+        return rst
+
+    @staticmethod
+    def reduce_torch_jit_objects(obj, rebuild_torch_jit_objects=rebuild_torch_jit_objects):
+        import torch.jit
+        b = io.BytesIO()
+
+        import objexplore
+
+        def exp(obj):
+            # Debug code
+            import types
+            while (v := objexplore.explore(obj)) is not None:
+                try:
+                    if isinstance(v, (types.FunctionType, types.MethodType)):
+                        v = v()
+
+                    if isinstance(v, str):
+                        print(v)
+                        print('-------------------------')
+                        input()
+                    elif isinstance(v, types.GeneratorType):
+                        exp(list(v))
+                    else:
+                        exp(v)
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                    print('-------------------------')
+                    input()
+
+        # exp(obj)
+        # import IPython
+        # IPython.embed()
+        # data = memoryview(torch._C._save_jit_module_to_bytes(obj._c, {}))
+        data = memoryview(obj.save_to_buffer())
+        return (rebuild_torch_jit_objects, (data,))
+
+
 def pytorch_pickle_quirks():
     import torch.nn
     forward = torch.nn.ModuleList.forward
     forward.__name__ = 'forward'
+
+    import torch.jit
+
+    # import IPython
+    # ForkingPickler.register(torch.jit.RecursiveScriptModule, lambda v: IPython.embed())
+
+    # FIXME: Handled at post process for now, revert it when non-shm tensor pickling is implemented
+    # ForkingPickler.register(torch.jit.RecursiveScriptModule, reduce_torch_jit_objects)
+    # # ForkingPickler.register(torch.jit.RecursiveScriptClass, reduce_torch_jit_objects)
+    # # ForkingPickler.register(torch.jit.ScriptObject, reduce_torch_jit_objects)
+    # ForkingPickler.register(torch.jit.ScriptModule, reduce_torch_jit_objects)
+    # ForkingPickler.register(torch.jit.ScriptFunction, reduce_torch_jit_objects)
+
+
+def stable_fast_quirks():
+    try:
+        import sfast.jit.utils
+        import sfast.triton.torch_ops  # noqa
+        import sfast.utils.flat_tensors
+    except ImportError:
+        return
+
+    sfast.jit.utils.attach_script_module_clear_hook =lambda *_, **__: None
+
+    # pickle dataclass type instead of just put it into a container (which will not survive after torch.jit.save)
+    def flatten_dataclass(obj):
+        from sfast.utils.flat_tensors import flatten_bytes, flatten_dict
+        import dataclasses
+        d = dict((field.name, getattr(obj, field.name))
+                for field in dataclasses.fields(obj))
+        import pickle
+        pickled = pickle.dumps(obj.__class__)
+        return flatten_bytes(pickled) + flatten_dict(d)
+
+    def unflatten_dataclass(tensors, start):
+        from sfast.utils.flat_tensors import unflatten_bytes, unflatten_dict
+        import pickle
+        pickled, start = unflatten_bytes(tensors, start)
+        clz = pickle.loads(pickled)
+        content, start = unflatten_dict(tensors, start)
+        return clz(**content), start
+
+    sfast.utils.flat_tensors.flatten_dataclass = flatten_dataclass
+    sfast.utils.flat_tensors.unflatten_dataclass = unflatten_dataclass
 
 
 def thread_quirks():
@@ -146,12 +254,13 @@ def init_reductions_client():
     ForkingPickler.register(memoryview, reduce_memoryview_on_client)
     thread_quirks()
     pytorch_pickle_quirks()
+    stable_fast_quirks()
     bitsandbytes_quirks()
 
 
 def init_reductions_server():
     ForkingPickler.register(memoryview, reduce_memoryview_on_server)
-    ForkingPickler.register(_local, lambda _: (_local, ()))
     thread_quirks()
     pytorch_pickle_quirks()
+    stable_fast_quirks()
     bitsandbytes_quirks()

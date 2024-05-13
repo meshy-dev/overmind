@@ -149,14 +149,17 @@ class OvermindService:
             return model
 
         seen = set()
+        ref = []
 
         def walk(m):
             if id(m) in seen:
                 return m
 
+            ref.append(m)
             seen.add(id(m))
 
             if isinstance(m, torch.nn.Module):
+                print('Module', f'{m.__class__.__module__}.{m.__class__.__name__}')
                 m = self._move_torch_module_to_cpu(m)
             elif isinstance(m, list):
                 for i, v in enumerate(m):
@@ -173,11 +176,15 @@ class OvermindService:
                 for k in keys:
                     setattr(m, k, walk(getattr(m, k)))
 
+            ref.append(m)
             seen.add(id(m))  # not a duplicate, m may has changed
 
             return m
 
         return walk(model)
+
+    def _temp_convert_to_serialized(self, m):
+        return reducer.RebuildTorchJitOnClient(m)
 
     def _move_torch_module_to_cpu(self, model):
         import torch
@@ -205,6 +212,11 @@ class OvermindService:
                 setattr(module, n.rsplit('.')[-1], v.to('cpu'))
 
             for n, v in module.named_children():
+                print('Children', f'{v.__class__.__module__}.{v.__class__.__name__}')
+
+                if isinstance(v, (torch.jit.ScriptModule, torch.jit.ScriptFunction, torch.jit.RecursiveScriptModule, torch.jit.RecursiveScriptClass)):
+                    1/0
+
                 walk(n, v)
 
         walk('', model)
