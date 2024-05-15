@@ -1,0 +1,92 @@
+#include <torch/extension.h>
+
+#include "pybind11/buffer_info.h"
+#include "pybind11/pytypes.h"
+
+/* #include <ATen/core/dispatch/OperatorOptions.h> */
+/* #include <ATen/core/ivalue.h> */
+/* #include <ATen/core/stack.h> */
+/* #include <torch/csrc/MemoryFormat.h> */
+#include <torch/csrc/Storage.h>
+/* #include <torch/csrc/jit/ir/ir.h> */
+/* #include <torch/csrc/jit/jit_log.h> */
+#include <torch/csrc/jit/serialization/import.h>
+#include <torch/csrc/jit/api/compilation_unit.h>
+#include <c10/util/intrusive_ptr.h>
+
+namespace overmind {
+
+struct membuf: std::streambuf {
+    membuf(char const* base, size_t size) {
+        char* p(const_cast<char*>(base));
+        this->setg(p, p, p + size);
+    }
+};
+struct imemstream: virtual membuf, std::istream {
+    imemstream(char const* base, size_t size)
+        : membuf(base, size)
+        , std::istream(static_cast<std::streambuf*>(this)) {
+    }
+};
+
+void initOvermindHelpers(py::module m) {
+    m.def("_make_untyped_storage", [](py::buffer b) {
+        py::buffer_info info = b.request();
+
+        if(info.itemsize != 1) {
+            throw py::type_error("Buffer item size must be 1");
+        }
+
+        auto size = info.size;
+        auto ptr = info.ptr;
+
+        return py::handle(THPStorage_New(
+            c10::make_intrusive<at::StorageImpl>(
+                c10::StorageImpl::use_byte_size_t(),
+                size,
+                at::DataPtr(
+                    ptr,
+                    new py::buffer_info(std::move(info)),
+                    [](void* ptr) {
+                        auto b = static_cast<py::buffer_info*>(ptr);
+                        delete b;
+                    },
+                    at::DeviceType::CPU
+                ),
+                /*allocator=*/nullptr,
+                /*resizable=*/false)
+            )
+        );
+    });
+    m.def(
+        // Copied from torch/csrc/jit/serialization/import.cpp,
+        // but accepts a python buffer instead of bytes
+        "import_ir_module_from_buffer_0copy",
+        [](std::shared_ptr<torch::jit::CompilationUnit> cu, py::buffer buffer) {
+            auto info = buffer.request();
+            if (info.itemsize != 1) {
+                throw py::type_error("Buffer item size must be 1");
+            }
+            imemstream in((char*)info.ptr, info.size);
+
+            c10::optional<at::Device> optional_device;
+            torch::jit::ExtraFilesMap extra_files_map;
+
+            auto ret = import_ir_module(
+                std::move(cu),
+                in,
+                optional_device,
+                extra_files_map,
+                /*load_debug_files*/ true,
+                /*restore_shapes*/ false);
+            return ret;
+        }
+    );
+}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  initOvermindHelpers(m);
+}
+
+
+} // namespace overmind

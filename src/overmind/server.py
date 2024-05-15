@@ -36,8 +36,6 @@ class OvermindService:
         self._tracked_memoryviews = {}
         self._tracked_wrapped = {}
 
-        reducer.current_service = self
-
     def exposed_ping(self):
         return 'pong'
 
@@ -299,10 +297,6 @@ class ThreadedServer:
 
 
 def main():
-    import torch.multiprocessing as mp
-
-    mp.set_sharing_strategy('file_system')
-
     import overmind.reducer
     overmind.reducer.init_reductions_server()
 

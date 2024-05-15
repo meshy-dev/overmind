@@ -1,22 +1,20 @@
 # -*- coding: utf-8 -*-
 
 # -- stdlib --
-from multiprocessing.reduction import ForkingPickler
 from _thread import _local
+from multiprocessing.reduction import ForkingPickler
 import io
+import zipfile
 
 # -- third party --
 import dill
 
 # -- own --
-from .shmem import SharedMemory
+from .shmem import Fragment
 from .utils.misc import hook
 
 
 # -- code --
-current_service = None
-
-
 class OvermindPickler(dill.Pickler):
 
     def __init__(self, file):
@@ -65,45 +63,19 @@ class RebuildTorchModuleOnClient:
         return model
 
 
-class SharedMemoryView:
-    # client memoryview -> server WrappedMemoryView (via reduce_memoryview_on_client)
-    # server WrappedMemoryView -> client memoryview (via reduce_memoryview_for_server)
-    def __init__(self, data: bytes | memoryview):
-        self._shmem = SharedMemory.create(len(data))
-        assert self._shmem.buf
-        self._shmem.buf[:] = data
+def _rebuild_memoryview_on_client(v: Fragment):
+    from .shmem import borrower
+    return borrower.borrow(v)
 
 
-def rebuild_memoryview_on_client(v: bytes | SharedMemoryView):
-    if isinstance(v, bytes):
-        return memoryview(v)
-    elif isinstance(v, SharedMemoryView):
-        return v._shmem.buf.toreadonly()
-    else:
-        raise Exception(f'Bad v: {v}')
+def _reduce_memoryview_on_client(v: memoryview):
+    return (memoryview, (bytes(v),))
 
 
-def rebuild_memoryview_on_server(v: bytes):
-    return memoryview(v)
-
-
-def reduce_memoryview_on_client(v: memoryview):
-    return (rebuild_memoryview_on_server, (bytes(v),))
-
-
-def reduce_memoryview_on_server(v: memoryview):
-    assert current_service
-
-    if len(v) < 1 * 1024 * 1024:
-        return (rebuild_memoryview_on_client, (bytes(v),))
-
-    if id(v) in current_service._tracked_memoryviews:
-        wrapped = current_service._tracked_wrapped[id(v)]
-    else:
-        current_service._tracked_memoryviews[id(v)] = v
-        current_service._tracked_wrapped[id(v)] = wrapped = SharedMemoryView(v)
-
-    return (rebuild_memoryview_on_client, (wrapped,))
+def _reduce_memoryview_on_server(v: memoryview):
+    from .shmem import hoarder
+    frag = hoarder.put(v)
+    return (_rebuild_memoryview_on_client, (frag,))
 
 
 def _reduce_bnb_param(p):
@@ -131,86 +103,103 @@ def bitsandbytes_quirks():
         self.code = self.code.to(device)
 
 
-class RebuildTorchJitOnClient:
+def _rebuild_torch_jit_objects(payload: memoryview):
+    from torch.jit._recursive import wrap_cpp_module
+    import torch._C
+    import overmind._C
 
-    def __init__(self, mod):
-        self.serialized = self.reduce_torch_jit_objects(mod)
-
-    def __reduce__(self):
-        return self.serialized
-
-    @staticmethod
-    def rebuild_torch_jit_objects(data):
-        ...  # Prevent string below to be recognized as docstring
-
-        # Flatbuffer version does not preserve device, not using it for now
-        '''
-        import torch._C
-        from torch.jit._recursive import wrap_cpp_module
-        # FIXME: data here is copied 2 times, each time cost 0.5s for a UNet model
-        # 1st copy happens here, since _load_jit_module_from_bytes will not accept memoryview objects
-        # 2nd copy happens in C++ code of _load_jit_module_from_bytes
-        data = bytes(data)
-        rst = wrap_cpp_module(torch._C._load_jit_module_from_bytes(data))
-        '''
-
-        import torch
-        rst = torch.jit.load(io.BytesIO(data))
-        return rst
-
-    @staticmethod
-    def reduce_torch_jit_objects(obj, rebuild_torch_jit_objects=rebuild_torch_jit_objects):
-        import torch.jit
-        b = io.BytesIO()
-
-        import objexplore
-
-        def exp(obj):
-            # Debug code
-            import types
-            while (v := objexplore.explore(obj)) is not None:
-                try:
-                    if isinstance(v, (types.FunctionType, types.MethodType)):
-                        v = v()
-
-                    if isinstance(v, str):
-                        print(v)
-                        print('-------------------------')
-                        input()
-                    elif isinstance(v, types.GeneratorType):
-                        exp(list(v))
-                    else:
-                        exp(v)
-                except Exception:
-                    import traceback
-                    traceback.print_exc()
-                    print('-------------------------')
-                    input()
-
-        # exp(obj)
-        # import IPython
-        # IPython.embed()
-        # data = memoryview(torch._C._save_jit_module_to_bytes(obj._c, {}))
-        data = memoryview(obj.save_to_buffer())
-        return (rebuild_torch_jit_objects, (data,))
+    cu = torch._C.CompilationUnit()
+    cpp_module = overmind._C.import_ir_module_from_buffer_0copy(cu, payload)
+    return wrap_cpp_module(cpp_module)
 
 
-def pytorch_pickle_quirks():
+def _reduce_torch_jit_objects(obj):
+    zipped = io.BytesIO()
+    obj.save(zipped)
+
+    zipped.seek(0)
+    inflated = io.BytesIO()
+
+    # Inflate the zip file to speed up loading
+    with zipfile.ZipFile(inflated, 'w', zipfile.ZIP_STORED) as o:
+        with zipfile.ZipFile(zipped, 'r') as i:
+            for f in i.infolist():
+                o.writestr(f, i.read(f.filename))
+
+    return (_rebuild_torch_jit_objects, (memoryview(inflated.getvalue()),))
+
+
+def _rebuild_storage_on_client(frag, device):
+    from .shmem import borrower
+    from overmind._C import _make_untyped_storage
+    mv = borrower.borrow(frag)
+    storage = _make_untyped_storage(mv)
+    if device == 'cpu':
+        return storage
+    elif str(device).startswith('cuda'):
+        return storage.cuda(device)
+
+
+def _reduce_storage(storage):
+    # Copied from torch.multiprocessing.reductions, with modifications
+
+    from torch.multiprocessing.reductions import rebuild_storage_empty
+    from .shmem import hoarder
+
+    if storage.size() == 0:
+        # This is special cased because Empty tensors
+        # (with size 0) cannot be mmapped.
+        return (rebuild_storage_empty, (type(storage),))
+    else:
+        frag = hoarder.put(bytes(storage))
+        return (_rebuild_storage_on_client, (frag, storage.device))
+
+
+def _reduce_tensor(tensor):
+    # Copied from torch.multiprocessing.reductions, with modifications
+    # - CUDA sharing is removed
+    # - Requires requires_grad == False
+
+    from torch.multiprocessing.reductions import check_serializing_named_tensor, rebuild_tensor
+    import torch.utils.hooks
+
+    storage = tensor._typed_storage()
+
+    if tensor.requires_grad:
+        raise RuntimeError(
+            "Tensors with requires_grad=True does not make sense in overmind, please fix it"
+        )
+
+    check_serializing_named_tensor(tensor)
+    torch.utils.hooks.warn_if_has_hooks(tensor)
+
+    # _backward_hooks purposely omitted here, see Note [Don't serialize hooks]
+    metadata = (
+        tensor.storage_offset(),
+        tensor.size(),
+        tensor.stride(),
+        tensor.requires_grad,
+    )
+    return (rebuild_tensor, (type(tensor), storage, metadata))
+
+
+def pytorch_pickle_quirks(*, server: bool):
     import torch.nn
     forward = torch.nn.ModuleList.forward
     forward.__name__ = 'forward'
 
     import torch.jit
+    import torch.multiprocessing.reductions
 
-    # import IPython
-    # ForkingPickler.register(torch.jit.RecursiveScriptModule, lambda v: IPython.embed())
+    if server:
+        ForkingPickler.register(torch.jit.RecursiveScriptModule, _reduce_torch_jit_objects)  # noqa
+        # ForkingPickler.register(torch.jit.RecursiveScriptClass, _reduce_torch_jit_objects)
+        # ForkingPickler.register(torch.jit.ScriptObject, _reduce_torch_jit_objects)
+        ForkingPickler.register(torch.jit.ScriptModule, _reduce_torch_jit_objects)
+        ForkingPickler.register(torch.jit.ScriptFunction, _reduce_torch_jit_objects)
 
-    # FIXME: Handled at post process for now, revert it when non-shm tensor pickling is implemented
-    # ForkingPickler.register(torch.jit.RecursiveScriptModule, reduce_torch_jit_objects)
-    # # ForkingPickler.register(torch.jit.RecursiveScriptClass, reduce_torch_jit_objects)
-    # # ForkingPickler.register(torch.jit.ScriptObject, reduce_torch_jit_objects)
-    # ForkingPickler.register(torch.jit.ScriptModule, reduce_torch_jit_objects)
-    # ForkingPickler.register(torch.jit.ScriptFunction, reduce_torch_jit_objects)
+        ForkingPickler.register(torch.Tensor, _reduce_tensor)
+        ForkingPickler.register(torch.UntypedStorage, _reduce_storage)
 
 
 def stable_fast_quirks():
@@ -221,7 +210,7 @@ def stable_fast_quirks():
     except ImportError:
         return
 
-    sfast.jit.utils.attach_script_module_clear_hook =lambda *_, **__: None
+    sfast.jit.utils.attach_script_module_clear_hook = lambda *_, **__: None
 
     # pickle dataclass type instead of just put it into a container (which will not survive after torch.jit.save)
     def flatten_dataclass(obj):
@@ -251,16 +240,16 @@ def thread_quirks():
 
 
 def init_reductions_client():
-    ForkingPickler.register(memoryview, reduce_memoryview_on_client)
+    ForkingPickler.register(memoryview, _reduce_memoryview_on_client)
     thread_quirks()
-    pytorch_pickle_quirks()
+    pytorch_pickle_quirks(server=False)
     stable_fast_quirks()
     bitsandbytes_quirks()
 
 
 def init_reductions_server():
-    ForkingPickler.register(memoryview, reduce_memoryview_on_server)
+    ForkingPickler.register(memoryview, _reduce_memoryview_on_server)
     thread_quirks()
-    pytorch_pickle_quirks()
+    pytorch_pickle_quirks(server=True)
     stable_fast_quirks()
     bitsandbytes_quirks()
