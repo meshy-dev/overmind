@@ -60,7 +60,18 @@ def _get_log_level(default_level: int) -> int:
     override_level = os.environ.get("OVERMIND_LOG_LEVEL", "")
     if not override_level:
         return default_level
-    level_map = logging.getLevelNamesMapping()
+    # logging.getLevelNamesMapping() is only available since py 3.11,
+    # but we are using py 3.10 in production.
+    level_map = {
+        'CRITICAL': logging.CRITICAL,
+        'FATAL': logging.FATAL,
+        'ERROR': logging.ERROR,
+        'WARN': logging.WARNING,
+        'WARNING': logging.WARNING,
+        'INFO': logging.INFO,
+        'DEBUG': logging.DEBUG,
+        'NOTSET': logging.NOTSET,
+    }
     return level_map.get(override_level.upper(), logging.DEBUG)
 
 
