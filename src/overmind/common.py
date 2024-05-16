@@ -43,13 +43,6 @@ class ServiceExceptionInfo:
         return ServiceException(self)
 
 
-class OvermindObjectRef(str):
-    __slots__ = ()
-
-    def __repr__(self):
-        return f'OvermindObjectRef({super().__repr__()})'
-
-
 def _deepfreeze(v):
     if isinstance(v, list):
         return tuple(_deepfreeze(i) for i in v)

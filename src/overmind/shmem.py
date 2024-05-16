@@ -2,7 +2,7 @@
 
 # -- stdlib --
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, TYPE_CHECKING, Tuple
 import base64
 import ctypes
 import mmap
@@ -13,6 +13,10 @@ import threading
 # -- third party --
 # -- own --
 from .common import OvermindEnv
+
+# -- typing --
+if TYPE_CHECKING:
+    from torch import UntypedStorage  # noqa: F401
 
 
 # -- code --
@@ -146,7 +150,7 @@ class Hoarder:
         self.arenas: List[Arena] = []
         self.lock = threading.RLock()
 
-    def put(self, data: bytes | memoryview, align=16):
+    def put(self, data: 'bytes | memoryview | UntypedStorage', align=16):
         with self.lock:
             size = len(data)
 

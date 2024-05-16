@@ -11,3 +11,15 @@ def test_make_untyped_storage():
 
     import gc
     gc.collect()
+
+
+def test_memcpy_from_untyped_storage():
+    import torch
+    import overmind._C
+    a = bytearray(100)
+    t = torch.empty(100, dtype=torch.uint8)
+    t.fill_(ord('A'))
+    storage = t.untyped_storage()
+    overmind._C._memcpy_from_untyped_storage(a, storage)
+    assert bytes(a) == b'A' * 100
+

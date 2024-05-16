@@ -28,41 +28,6 @@ class OvermindPickler(dill.Pickler):
         return buf.getbuffer()
 
 
-class RebuildTorchModuleOnClient:
-
-    def __init__(self, model, dev_map):
-        self.model = model
-        self.dev_map = dev_map
-
-    def __reduce__(self):
-        return (
-            self._rebuild,
-            (self.model, self.dev_map),
-        )
-
-    @staticmethod
-    def _rebuild(model, dev_map):
-        import torch
-
-        def walk(prefix, module):
-            for n, v in module.named_parameters(prefix=prefix, recurse=False):
-                v1 = v.to(dev_map[n])
-                if type(v) is torch.nn.Parameter:
-                    v1 = torch.nn.Parameter(v1)
-
-                assert type(v) is type(v1)
-                setattr(module, n.rsplit('.')[-1], v1)
-
-            for n, v in module.named_buffers(prefix=prefix, recurse=False):
-                setattr(module, n.rsplit('.')[-1], v.to(dev_map[n]))
-
-            for n, v in module.named_children():
-                walk(n, v)
-
-        walk('', model)
-        return model
-
-
 def _rebuild_memoryview_on_client(v: Fragment):
     from .shmem import borrower
     return borrower.borrow(v)
@@ -151,7 +116,9 @@ def _reduce_storage(storage):
         # (with size 0) cannot be mmapped.
         return (rebuild_storage_empty, (type(storage),))
     else:
-        frag = hoarder.put(bytes(storage))
+        device = storage.device
+        storage = storage.cpu()
+        frag = hoarder.put(storage)
         return (_rebuild_storage_on_client, (frag, storage.device))
 
 
@@ -191,15 +158,32 @@ def pytorch_pickle_quirks(*, server: bool):
     import torch.jit
     import torch.multiprocessing.reductions
 
-    if server:
-        ForkingPickler.register(torch.jit.RecursiveScriptModule, _reduce_torch_jit_objects)  # noqa
-        # ForkingPickler.register(torch.jit.RecursiveScriptClass, _reduce_torch_jit_objects)
-        # ForkingPickler.register(torch.jit.ScriptObject, _reduce_torch_jit_objects)
-        ForkingPickler.register(torch.jit.ScriptModule, _reduce_torch_jit_objects)
-        ForkingPickler.register(torch.jit.ScriptFunction, _reduce_torch_jit_objects)
+    def register_server(cls, fn):
+        ForkingPickler.register(cls, fn)
 
-        ForkingPickler.register(torch.Tensor, _reduce_tensor)
-        ForkingPickler.register(torch.UntypedStorage, _reduce_storage)
+    def forbid_reducing(obj):
+        raise RuntimeError(
+            f"You should not pickle a {type(obj)} object "
+            "(or sending it to overmind, which is basically the same thing). "
+            "This is a limitation of overmind."
+        )
+
+    def register_client(cls, _fn):
+        ForkingPickler.register(cls, forbid_reducing)
+
+    if server:
+        register = register_server
+    else:
+        register = register_client
+
+    register(torch.jit.RecursiveScriptModule, _reduce_torch_jit_objects)  # noqa
+    # register(torch.jit.RecursiveScriptClass, _reduce_torch_jit_objects)
+    # register(torch.jit.ScriptObject, _reduce_torch_jit_objects)
+    register(torch.jit.ScriptModule, _reduce_torch_jit_objects)
+    register(torch.jit.ScriptFunction, _reduce_torch_jit_objects)
+
+    register(torch.Tensor, _reduce_tensor)
+    register(torch.UntypedStorage, _reduce_storage)
 
 
 def stable_fast_quirks():

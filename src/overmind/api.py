@@ -20,7 +20,7 @@ import torch.multiprocessing as mp
 
 # -- own --
 from . import common
-from .common import OvermindEnv, OvermindObjectRef, ServiceExceptionInfo, key_of
+from .common import OvermindEnv, ServiceExceptionInfo, key_of
 from .utils.misc import hook
 
 
@@ -136,16 +136,6 @@ class OvermindClient:
         log.warning('Could not connect to overmind server, falling back to local mode')
         self.enabled = False
 
-    def _convert_to_refs(self, obj):
-        if isinstance(obj, (list, tuple)):
-            return obj.__class__([self._convert_to_refs(x) for x in obj])
-        elif isinstance(obj, dict):
-            return {k: self._convert_to_refs(v) for k, v in obj.items()}
-        elif (rid := getattr(obj, '_overmind_ref', None)) is not None:
-            return OvermindObjectRef(str(rid))
-        else:
-            return obj
-
     def _local_cached_load(self, fn, args, kwargs):
         if os.environ.get('OVERMIND_NO_LOCAL_CACHE'):
             return fn(*args, **kwargs)
@@ -169,8 +159,6 @@ class OvermindClient:
         if isinstance(fn, types.FunctionType):
             # This makes pickle happy
             fn = (fn.__module__, fn.__name__)
-
-        fn, args, kwargs = self._convert_to_refs((fn, args, kwargs))
 
         b: bytes = self._call('load', fn, args, kwargs)
         return Pickler.loads(b)

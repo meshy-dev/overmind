@@ -33,9 +33,9 @@ void initOvermindHelpers(py::module m) {
     m.def("_make_untyped_storage", [](py::buffer b) {
         py::buffer_info info = b.request();
 
-        if(info.itemsize != 1) {
-            throw py::type_error("Buffer item size must be 1");
-        }
+        if (info.itemsize != 1) throw py::type_error("Buffer item size must be 1");
+        if (info.ndim != 1) throw py::type_error("Buffer must be 1-dimensional");
+        if (info.format != "B") throw py::type_error("Buffer format must be 'B'");
 
         auto size = info.size;
         auto ptr = info.ptr;
@@ -64,9 +64,11 @@ void initOvermindHelpers(py::module m) {
         "import_ir_module_from_buffer_0copy",
         [](std::shared_ptr<torch::jit::CompilationUnit> cu, py::buffer buffer) {
             auto info = buffer.request();
-            if (info.itemsize != 1) {
-                throw py::type_error("Buffer item size must be 1");
-            }
+
+            if (info.itemsize != 1) throw py::type_error("Buffer item size must be 1");
+            if (info.ndim != 1) throw py::type_error("Buffer must be 1-dimensional");
+            if (info.format != "B") throw py::type_error("Buffer format must be 'B'");
+
             imemstream in((char*)info.ptr, info.size);
 
             c10::optional<at::Device> optional_device;
@@ -82,6 +84,32 @@ void initOvermindHelpers(py::module m) {
             return ret;
         }
     );
+    m.def(
+        "_memcpy_from_untyped_storage",
+        [](py::buffer dst, py::handle src) {
+            py::buffer_info dst_info = dst.request();
+
+            if (dst_info.itemsize != 1) throw py::type_error("Buffer item size must be 1");
+            if (dst_info.ndim != 1) throw py::type_error("Buffer must be 1-dimensional");
+            if (dst_info.format != "B") throw py::type_error("Buffer format must be 'B'");
+            if (dst_info.readonly) throw py::value_error("Destination buffer is read-only");
+
+            auto UntypedStorage = py::module::import("torch").attr("UntypedStorage");
+
+            if (!py::isinstance(src, UntypedStorage)) {
+                throw py::type_error("Source must be an UntypedStorage");
+            }
+
+            auto src_storage = reinterpret_cast<THPStorage*>(src.ptr());
+            auto src_storage_impl = src_storage->cdata;
+            auto src_ptr = src_storage_impl->data_ptr().get();
+            auto src_size = src_storage_impl->nbytes();
+            if (src_size != (size_t)dst_info.size) {
+                throw py::value_error("Source and destination buffers must have the same size");
+            }
+            std::cout << "Copying " << src_size << " bytes from " << src_ptr << " to " << dst_info.ptr << std::endl;
+            std::memcpy(dst_info.ptr, src_ptr, src_size);
+        });
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
