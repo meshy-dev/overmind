@@ -2,6 +2,7 @@
 
 # -- stdlib --
 import logging
+import os
 import sys
 
 # -- third party --
@@ -55,11 +56,22 @@ class MyFormatter(logging.Formatter):
         return f'{prefix} {rec.message}'
 
 
-def init(level, logfile):
-    root = logging.getLogger()
-    root.setLevel(level)
+def _get_log_level(default_level: int) -> int:
+    override_level = os.environ.get("OVERMIND_LOG_LEVEL", "")
+    if not override_level:
+        return default_level
+    level_map = logging.getLevelNamesMapping()
+    return level_map.get(override_level.upper(), logging.DEBUG)
 
-    fmter = MyFormatter()
+
+def init(default_level, logfile):
+    root = logging.getLogger()
+    root.setLevel(_get_log_level(default_level))
+
+    # https://no-color.org/
+    # Honor the NO_COLOR env var
+    use_color = sys.stdout.isatty() and not os.environ.get("NO_COLOR", "")
+    fmter = MyFormatter(use_color=use_color)
     std = logging.StreamHandler(stream=sys.stdout)
     std.setFormatter(fmter)
     root.addHandler(std)
