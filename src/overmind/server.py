@@ -4,8 +4,6 @@
 from multiprocessing.connection import Connection, Listener
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
-from types import SimpleNamespace
-import sys
 import argparse
 import importlib
 import logging
