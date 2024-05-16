@@ -70,7 +70,7 @@ def init(default_level, logfile):
 
     # https://no-color.org/
     # Honor the NO_COLOR env var
-    use_color = os.isatty(sys.stdout) and not os.environ.get("NO_COLOR", "")
+    use_color = sys.stdout.isatty() and not os.environ.get("NO_COLOR", "")
     fmter = MyFormatter(use_color=use_color)
     std = logging.StreamHandler(stream=sys.stdout)
     std.setFormatter(fmter)
