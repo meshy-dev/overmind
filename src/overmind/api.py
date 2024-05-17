@@ -189,26 +189,6 @@ def monkey_patch(modulename, clsname, method):
     log.info(f'Patched {modulename}.{clsname}.{method}')
 
 
-def monkey_patch_torch_load():
-    if common.IN_OVERMIND_SERVER:
-        return
-
-    import torch
-
-    def hook_load(orig, f, map_location=None, **kwargs):
-        if map_location in ('cpu', torch.device("cpu")):
-            return load(orig, f, map_location, **kwargs)
-        elif map_location is None:
-            log.warning('torch.load called with map_location=None, aggressively assuming to load on CPU')
-            return load(orig, f, 'cpu', **kwargs)
-        else:
-            log.warning('torch.load called with map_location != "cpu", falling back to local mode')
-            return orig(f, map_location, **kwargs)
-
-    hook(torch, name='load')(hook_load)
-    hook(torch.jit, name='load')(hook_load)
-
-
 @lru_cache(1)
 def monkey_patch_all():
     if common.IN_OVERMIND_SERVER:
@@ -232,8 +212,8 @@ def monkey_patch_all():
     monkey_patch('torchvision.models.vgg',               None,                          'vgg16')
     monkey_patch('open_clip',                            None,                          'create_model_and_transforms')
     monkey_patch('safetensors.torch',                    None,                          'load_file')
-
-    monkey_patch_torch_load()
+    monkey_patch('torch',                                None,                          'load')
+    monkey_patch('torch.jit',                            None,                          'load')
 
 
 def diffusers_dyn_module_workaround():
@@ -262,7 +242,6 @@ def _init():
     if common.IN_OVERMIND_SERVER is True:
         return
     common.IN_OVERMIND_SERVER = False
-    mp.set_sharing_strategy('file_system')
     apply_quirks()
     from .reducer import init_reductions_client
     init_reductions_client()
