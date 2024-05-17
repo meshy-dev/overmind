@@ -21,7 +21,23 @@ struct membuf: std::streambuf {
         char* p(const_cast<char*>(base));
         this->setg(p, p, p + size);
     }
+    pos_type seekoff(off_type off,
+                    std::ios_base::seekdir dir,
+                    std::ios_base::openmode which = std::ios_base::in) {
+        if (dir == std::ios_base::cur)
+            gbump(off);
+        else if (dir == std::ios_base::end)
+            setg(eback(), egptr() + off, egptr());
+        else if (dir == std::ios_base::beg)
+            setg(eback(), eback() + off, egptr());
+        return gptr() - eback();
+    }
+    pos_type seekpos(pos_type sp,
+                    std::ios_base::openmode which = std::ios_base::in) {
+        return seekoff(sp, std::ios_base::beg, which);
+    }
 };
+
 struct imemstream: virtual membuf, std::istream {
     imemstream(char const* base, size_t size)
         : membuf(base, size)
@@ -58,6 +74,7 @@ void initOvermindHelpers(py::module m) {
             )
         );
     });
+
     m.def(
         // Copied from torch/csrc/jit/serialization/import.cpp,
         // but accepts a python buffer instead of bytes
@@ -70,6 +87,7 @@ void initOvermindHelpers(py::module m) {
             if (info.format != "B") throw py::type_error("Buffer format must be 'B'");
 
             imemstream in((char*)info.ptr, info.size);
+            in.seekg(0);
 
             c10::optional<at::Device> optional_device;
             torch::jit::ExtraFilesMap extra_files_map;
@@ -107,7 +125,6 @@ void initOvermindHelpers(py::module m) {
             if (src_size != (size_t)dst_info.size) {
                 throw py::value_error("Source and destination buffers must have the same size");
             }
-            std::cout << "Copying " << src_size << " bytes from " << src_ptr << " to " << dst_info.ptr << std::endl;
             std::memcpy(dst_info.ptr, src_ptr, src_size);
         });
 }

@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 from typing import List, TYPE_CHECKING, Tuple
 import base64
+import logging
 import ctypes
 import mmap
 import os
@@ -20,9 +21,12 @@ if TYPE_CHECKING:
 
 
 # -- code --
+log = logging.getLogger('overmind.shmem')
+
+
 def _make_filename(shift):
     venv = OvermindEnv.get().venv_hash
-    rnd = base64.b32encode(random.randbytes(5))
+    rnd = base64.b32encode(random.randbytes(5)).decode('utf-8')
     return f'Overmind-{venv}-{shift}-{rnd}'
 
 
@@ -151,21 +155,35 @@ class Hoarder:
         self.lock = threading.RLock()
 
     def put(self, data: 'bytes | memoryview | UntypedStorage', align=16):
+        import overmind._C
+        from torch import UntypedStorage
+
         with self.lock:
             size = len(data)
 
-            for arena in self.arenas:
+            for (i, arena) in enumerate(self.arenas):
                 current = (arena.current + align - 1) & ~(align - 1)
 
                 if len(arena.mem.view) - current < size:
                     continue
 
+                # log.debug(
+                #     'Hoarder: Fragment size = %s, chosen arena = %s, arena_current = %x, aligned_current = %x',
+                #     size, i, arena.current, current,
+                # )
+
                 arena.current = current + size
                 memory = arena.mem.view[current:current + size]
-                memory[:] = data
+                if isinstance(data, UntypedStorage):
+                    # Special method to speed up things
+                    assert data.device.type == 'cpu'
+                    overmind._C._memcpy_from_untyped_storage(memory, data)
+                else:
+                    memory[:] = data
                 return Fragment(arena=arena.mem.mem_id, offset=current, size=size)
             else:
                 self.shift += 1
+                log.debug('Hoarder: Creating new arena with shift = %s', self.shift)
                 self.arenas.append(Arena(
                     mem=SharedMemory.create(self.shift),
                     current=0,

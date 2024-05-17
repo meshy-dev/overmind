@@ -75,9 +75,13 @@ def display_of(fn, args, kwargs):
 
 
 def _coalesce_to_kwargs(fn, args, kwargs):
-    s = inspect.signature(fn)
-    bs = s.bind(*args, **kwargs)
-    kwargs = bs.arguments
+    try:
+        s = inspect.signature(fn)
+        bs = s.bind(*args, **kwargs)
+        kwargs = bs.arguments
+    except ValueError:
+        kwargs = {**kwargs, '__args': args}
+
     return kwargs
 
 

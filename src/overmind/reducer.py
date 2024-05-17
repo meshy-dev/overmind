@@ -43,31 +43,6 @@ def _reduce_memoryview_on_server(v: memoryview):
     return (_rebuild_memoryview_on_client, (frag,))
 
 
-def _reduce_bnb_param(p):
-    assert p.quant_state
-    qs_dict = p.quant_state.as_dict(packed=True)
-    return (_rebuild_bnb_param, (type(p), p.data, qs_dict))
-
-
-def _rebuild_bnb_param(typ, data, qs_dict):
-    return typ.from_prequantized(data, qs_dict, device='cpu')
-
-
-def bitsandbytes_quirks():
-    try:
-        import bitsandbytes
-    except ImportError:
-        return
-
-    ForkingPickler.register(bitsandbytes.nn.modules.Params4bit, _reduce_bnb_param)
-    ForkingPickler.register(bitsandbytes.nn.modules.Int8Params, _reduce_bnb_param)
-
-    @hook(bitsandbytes.nn.modules.QuantState)
-    def to(orig, self, device):
-        orig(self, device)
-        self.code = self.code.to(device)
-
-
 def _rebuild_torch_jit_objects(payload: memoryview):
     from torch.jit._recursive import wrap_cpp_module
     import torch._C
@@ -79,9 +54,9 @@ def _rebuild_torch_jit_objects(payload: memoryview):
 
 
 def _reduce_torch_jit_objects(obj):
+    import torch
     zipped = io.BytesIO()
-    obj.save(zipped)
-
+    torch.jit.save(obj, zipped)
     zipped.seek(0)
     inflated = io.BytesIO()
 
@@ -99,10 +74,12 @@ def _rebuild_storage_on_client(frag, device):
     from overmind._C import _make_untyped_storage
     mv = borrower.borrow(frag)
     storage = _make_untyped_storage(mv)
-    if device == 'cpu':
+    if device.type == 'cpu':
         return storage
-    elif str(device).startswith('cuda'):
+    elif device.type == 'cuda':
         return storage.cuda(device)
+    else:
+        raise ValueError(f'Unexpected device {repr(device)}')
 
 
 def _reduce_storage(storage):
@@ -119,7 +96,7 @@ def _reduce_storage(storage):
         device = storage.device
         storage = storage.cpu()
         frag = hoarder.put(storage)
-        return (_rebuild_storage_on_client, (frag, storage.device))
+        return (_rebuild_storage_on_client, (frag, device))
 
 
 def _reduce_tensor(tensor):
@@ -182,7 +159,11 @@ def pytorch_pickle_quirks(*, server: bool):
     register(torch.jit.ScriptModule, _reduce_torch_jit_objects)
     register(torch.jit.ScriptFunction, _reduce_torch_jit_objects)
 
+    for t in torch._tensor_classes:
+        register(t, _reduce_tensor)
     register(torch.Tensor, _reduce_tensor)
+    register(torch.nn.parameter.Parameter, _reduce_tensor)
+
     register(torch.UntypedStorage, _reduce_storage)
 
 
@@ -228,7 +209,6 @@ def init_reductions_client():
     thread_quirks()
     pytorch_pickle_quirks(server=False)
     stable_fast_quirks()
-    bitsandbytes_quirks()
 
 
 def init_reductions_server():
@@ -236,4 +216,3 @@ def init_reductions_server():
     thread_quirks()
     pytorch_pickle_quirks(server=True)
     stable_fast_quirks()
-    bitsandbytes_quirks()

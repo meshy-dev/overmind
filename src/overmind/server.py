@@ -5,6 +5,7 @@ from multiprocessing.connection import Connection, Listener
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
 import argparse
+import gc
 import importlib
 import logging
 import os
@@ -12,11 +13,9 @@ import sys
 import threading
 import time
 import traceback
-import uuid
 
 # -- third party --
 # -- own --
-from . import reducer
 from .common import OvermindEnv, ServiceExceptionInfo, display_of, key_of
 from .reducer import OvermindPickler
 
@@ -107,12 +106,19 @@ class OvermindService:
 
             model = self._transform(model)
             log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
-            self._models[key] = model
+
+            b4 = time.time()
+            self._models[key] = OvermindPickler.dumps(OvermindPickler.dumps(model))  # Double pickle, saving pickle to shared mem too!
+            log.info('Pickled in %.3fs, size = %s bytes', time.time() - b4, len(self._models[key]))
 
             self._models_disp.append(disp)
-            data = bytes(OvermindPickler.dumps(self._models[key]))
-            log.info(f'Will send {len(data)} bytes')
-            return data
+
+            del model
+
+            gc.collect()
+            torch.cuda.empty_cache()
+
+            return self._models[key]
 
     def _transform(self, model):
         model = self._set_no_grad(model)

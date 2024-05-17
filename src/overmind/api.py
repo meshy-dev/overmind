@@ -161,7 +161,7 @@ class OvermindClient:
             fn = (fn.__module__, fn.__name__)
 
         b: bytes = self._call('load', fn, args, kwargs)
-        return Pickler.loads(b)
+        return Pickler.loads(Pickler.loads(b))
 
 
 om = OvermindClient()
