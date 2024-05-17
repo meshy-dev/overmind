@@ -3,13 +3,7 @@
 #include "pybind11/buffer_info.h"
 #include "pybind11/pytypes.h"
 
-/* #include <ATen/core/dispatch/OperatorOptions.h> */
-/* #include <ATen/core/ivalue.h> */
-/* #include <ATen/core/stack.h> */
-/* #include <torch/csrc/MemoryFormat.h> */
 #include <torch/csrc/Storage.h>
-/* #include <torch/csrc/jit/ir/ir.h> */
-/* #include <torch/csrc/jit/jit_log.h> */
 #include <torch/csrc/jit/serialization/import.h>
 #include <torch/csrc/jit/api/compilation_unit.h>
 #include <c10/util/intrusive_ptr.h>
