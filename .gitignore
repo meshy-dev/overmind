@@ -162,3 +162,6 @@ cython_debug/
 #.idea/
 
 compile_commands.json
+
+# Managed by pdm
+setup.py
