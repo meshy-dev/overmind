@@ -7,6 +7,7 @@ authors = [
 ]
 dependencies = [
     "daemonize>=2.5.0",
+    "torch>=2.1.1",
 ]
 requires-python = ">=3.9"
 readme = "README.md"
@@ -19,11 +20,19 @@ overmind-shutdown= "overmind.cli:shutdown"
 overmind-drop-shell= "overmind.cli:drop_shell"
 
 [build-system]
-requires = ["pdm-backend"]
+requires = ["pdm-backend", "torch"]
 build-backend = "pdm.backend"
 
 [tool.pdm]
 distribution = true
+
+[tool.pdm.build]
+run-setuptools = true
+
+[tool.pdm.options]
+add = ["--no-isolation"]
+install = ["--no-isolation"]
+build = ["--no-isolation"]
 
 [tool.pdm.version]
 source = "scm"

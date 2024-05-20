@@ -5,24 +5,22 @@ from multiprocessing.connection import Connection, Listener
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
 import argparse
+import gc
 import importlib
 import logging
-import multiprocessing.reduction
 import os
 import sys
 import threading
 import time
 import traceback
-import uuid
 
 # -- third party --
 # -- own --
-from . import reducer
-from .common import OvermindEnv, OvermindObjectRef, ServiceExceptionInfo, display_of, key_of
+from .common import OvermindEnv, ServiceExceptionInfo, display_of, key_of
+from .reducer import OvermindPickler
 
 
 # -- code --
-Pickler = multiprocessing.reduction.ForkingPickler
 log = logging.getLogger('overmind.server')
 
 
@@ -31,13 +29,8 @@ class OvermindService:
     def __init__(self):
         super().__init__()
         self._models = {}
-        self._models_byref = {}
         self._models_disp = []  # solely for debugging
         self._loading = threading.Lock()
-        self._tracked_memoryviews = {}
-        self._tracked_wrapped = {}
-
-        reducer.current_service = self
 
     def exposed_ping(self):
         return 'pong'
@@ -98,39 +91,38 @@ class OvermindService:
         # End of heuristics
 
         if key in self._models:
-            payload = bytes(Pickler.dumps(self._models[key]))
+            payload = self._models[key]
             log.debug('Providing cached model %s (%s bytes over wire)', disp, len(payload))
             return payload
 
         with self._loading:
             if key in self._models:
                 log.debug('Providing cached model (just loaded!) %s', disp)
-                return bytes(Pickler.dumps(self._models[key]))
+                return self._models[key]
 
-            kwargs = self._convert_refs(kwargs)
             log.info('Cold load model %s', disp)
             b4 = time.time()
             model = fn(*args, **kwargs)
 
-            rid = str(uuid.uuid4())
-            try:
-                model._overmind_ref = rid
-            except AttributeError:
-                pass
-
             model = self._transform(model)
             log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
-            self._models[key] = model
 
-            self._models_byref[rid] = model
+            b4 = time.time()
+            self._models[key] = OvermindPickler.dumps(OvermindPickler.dumps(model))  # Double pickle, saving pickle to shared mem too!
+            log.info('Pickled in %.3fs, size = %s bytes', time.time() - b4, len(self._models[key]))
+
             self._models_disp.append(disp)
-            data = bytes(Pickler.dumps(self._models[key]))
-            log.info(f'Will send {len(data)} bytes')
-            return data
+
+            del model
+
+            gc.collect()
+            torch.cuda.empty_cache()
+
+            return self._models[key]
 
     def _transform(self, model):
         model = self._set_no_grad(model)
-        model = self._move_generic_thing_to_cpu(model)
+        model = self._walk_generic_thing(model)
         return model
 
     def _set_no_grad(self, model):
@@ -143,22 +135,21 @@ class OvermindService:
 
         return model
 
-    def _move_generic_thing_to_cpu(self, model):
-        try:
-            import torch
-        except ImportError:
-            return model
+    def _walk_generic_thing(self, obj):
+        import torch
 
         seen = set()
+        ref = []
 
         def walk(m):
             if id(m) in seen:
                 return m
 
+            ref.append(m)
             seen.add(id(m))
 
             if isinstance(m, torch.nn.Module):
-                m = self._move_torch_module_to_cpu(m)
+                m = self._remove_accelerate_hooks(m)
             elif isinstance(m, list):
                 for i, v in enumerate(m):
                     m[i] = walk(v)
@@ -174,41 +165,18 @@ class OvermindService:
                 for k in keys:
                     setattr(m, k, walk(getattr(m, k)))
 
+            ref.append(m)
             seen.add(id(m))  # not a duplicate, m may has changed
 
             return m
 
-        return walk(model)
+        return walk(obj)
 
-    def _move_torch_module_to_cpu(self, model):
+    def _remove_accelerate_hooks(self, model):
         import torch
 
         if not isinstance(model, torch.nn.Module):
             return model
-
-        dev_map = {}
-
-        def walk(prefix, module):
-            for n, v in module.named_parameters(prefix=prefix, recurse=False):
-                dev_map[n] = v.device
-                if v.device.type == 'cpu':
-                    continue
-                v1 = v.to('cpu')
-                if type(v) is torch.nn.Parameter:
-                    v1 = torch.nn.Parameter(v1)
-                assert type(v) is type(v1)
-                setattr(module, n.rsplit('.')[-1], v1)
-
-            for n, v in module.named_buffers(prefix=prefix, recurse=False):
-                dev_map[n] = v.device
-                if v.device.type == 'cpu':
-                    continue
-                setattr(module, n.rsplit('.')[-1], v.to('cpu'))
-
-            for n, v in module.named_children():
-                walk(n, v)
-
-        walk('', model)
 
         # Remove AlignDevices hooks
         from accelerate.hooks import remove_hook_from_module
@@ -220,16 +188,7 @@ class OvermindService:
         model.__dict__.pop('xpu', None)
         model.__dict__.pop('npu', None)
 
-        # Do not wrap pure CPU models
-        if set(dev_map.values()) == {torch.device("cpu")}:
-            return model
-
-        # Drop VRAM usage at best
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        return reducer.RebuildTorchModuleOnClient(model, dev_map)
+        return model
 
     def exposed_shutdown(self):
         log.info('!! Bye')
@@ -241,16 +200,6 @@ class OvermindService:
     def exposed_drop_shell(self):
         import IPython
         IPython.embed()
-
-    def _convert_refs(self, obj):
-        if isinstance(obj, (list, tuple)):
-            return obj.__class__([self._convert_refs(x) for x in obj])
-        elif isinstance(obj, dict):
-            return {k: self._convert_refs(v) for k, v in obj.items()}
-        elif isinstance(obj, OvermindObjectRef):
-            return self._models_byref[str(obj)]
-        else:
-            return obj
 
 
 class ThreadedServer:
@@ -288,10 +237,6 @@ class ThreadedServer:
 
 
 def main():
-    import torch.multiprocessing as mp
-
-    mp.set_sharing_strategy('file_system')
-
     import overmind.reducer
     overmind.reducer.init_reductions_server()
 

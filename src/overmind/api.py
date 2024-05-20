@@ -16,11 +16,10 @@ import time
 import types
 
 # -- third party --
-import torch.multiprocessing as mp
 
 # -- own --
 from . import common
-from .common import OvermindEnv, OvermindObjectRef, ServiceExceptionInfo, key_of
+from .common import OvermindEnv, ServiceExceptionInfo, key_of, display_of
 from .utils.misc import hook
 
 
@@ -136,16 +135,6 @@ class OvermindClient:
         log.warning('Could not connect to overmind server, falling back to local mode')
         self.enabled = False
 
-    def _convert_to_refs(self, obj):
-        if isinstance(obj, (list, tuple)):
-            return obj.__class__([self._convert_to_refs(x) for x in obj])
-        elif isinstance(obj, dict):
-            return {k: self._convert_to_refs(v) for k, v in obj.items()}
-        elif (rid := getattr(obj, '_overmind_ref', None)) is not None:
-            return OvermindObjectRef(str(rid))
-        else:
-            return obj
-
     def _local_cached_load(self, fn, args, kwargs):
         if os.environ.get('OVERMIND_NO_LOCAL_CACHE'):
             return fn(*args, **kwargs)
@@ -170,10 +159,13 @@ class OvermindClient:
             # This makes pickle happy
             fn = (fn.__module__, fn.__name__)
 
-        fn, args, kwargs = self._convert_to_refs((fn, args, kwargs))
-
+        b4 = time.time()
         b: bytes = self._call('load', fn, args, kwargs)
-        return Pickler.loads(b)
+        rpc_time = time.time() - b4
+        obj = Pickler.loads(Pickler.loads(b))
+        disp = display_of(fn, args, kwargs)
+        log.debug(f'Loaded {disp} in {time.time() - b4:.3f}s (rpc: {rpc_time:.3f}s)')
+        return obj
 
 
 om = OvermindClient()
@@ -201,26 +193,6 @@ def monkey_patch(modulename, clsname, method):
     log.info(f'Patched {modulename}.{clsname}.{method}')
 
 
-def monkey_patch_torch_load():
-    if common.IN_OVERMIND_SERVER:
-        return
-
-    import torch
-
-    def hook_load(orig, f, map_location=None, **kwargs):
-        if map_location in ('cpu', torch.device("cpu")):
-            return load(orig, f, map_location, **kwargs)
-        elif map_location is None:
-            log.warning('torch.load called with map_location=None, aggressively assuming to load on CPU')
-            return load(orig, f, 'cpu', **kwargs)
-        else:
-            log.warning('torch.load called with map_location != "cpu", falling back to local mode')
-            return orig(f, map_location, **kwargs)
-
-    hook(torch, name='load')(hook_load)
-    hook(torch.jit, name='load')(hook_load)
-
-
 @lru_cache(1)
 def monkey_patch_all():
     if common.IN_OVERMIND_SERVER:
@@ -244,8 +216,8 @@ def monkey_patch_all():
     monkey_patch('torchvision.models.vgg',               None,                          'vgg16')
     monkey_patch('open_clip',                            None,                          'create_model_and_transforms')
     monkey_patch('safetensors.torch',                    None,                          'load_file')
-
-    monkey_patch_torch_load()
+    monkey_patch('torch',                                None,                          'load')
+    monkey_patch('torch.jit',                            None,                          'load')
 
 
 def diffusers_dyn_module_workaround():
@@ -274,7 +246,6 @@ def _init():
     if common.IN_OVERMIND_SERVER is True:
         return
     common.IN_OVERMIND_SERVER = False
-    mp.set_sharing_strategy('file_system')
     apply_quirks()
     from .reducer import init_reductions_client
     init_reductions_client()

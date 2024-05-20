@@ -1,34 +1,36 @@
 # -*- coding: utf-8 -*-
 
-"""Provides shared memory for direct access across processes.
-
-The API of this package is currently provisional. Refer to the
-documentation for details.
-
-
-Modified from multiprocessing.shared_memory.SharedMemory
-"""
-
 # -- stdlib --
+from dataclasses import dataclass
+from typing import List, TYPE_CHECKING, Tuple
 import base64
-import mmap
+import logging
 import ctypes
+import mmap
 import os
 import random
+import threading
 
 # -- third party --
 # -- own --
 from .common import OvermindEnv
 
+# -- typing --
+if TYPE_CHECKING:
+    from torch import UntypedStorage  # noqa: F401
+
 
 # -- code --
-__all__ = [ 'SharedMemory' ]
+log = logging.getLogger('overmind.shmem')
 
 
-def _make_filename():
+def _make_filename(shift):
     venv = OvermindEnv.get().venv_hash
-    rnd = base64.b32encode(random.randbytes(5))
-    return f'Overmind-{venv}-{rnd}'
+    rnd = base64.b32encode(random.randbytes(5)).decode('utf-8')
+    return f'Overmind-{venv}-{shift}-{rnd}'
+
+
+SharedMemoryId = Tuple[int, int] | str  # (pid, fd) for (unix), str for shmem name (win32)
 
 
 class SharedMemory:
@@ -40,44 +42,40 @@ class SharedMemory:
     _COOKIE = object()
 
     @classmethod
-    def create(cls, size):
-        if not size > 0:
-            raise ValueError("'size' must be a positive number different from zero")
+    def create(cls, shift):
+        if not shift > 0:
+            raise ValueError("'shift' must be a positive number different from zero")
 
         if os.name == 'posix':
-            return cls._create_posix(size)
+            return cls._create_posix(shift)
         else:
-            return cls._create_win32(size)
+            return cls._create_win32(shift)
 
     @classmethod
-    def _create_posix(cls, size):
+    def _create_posix(cls, shift):
         libc = ctypes.CDLL(None)
-        fd = libc.memfd_create(b'overmind-shmem', os.O_RDWR)
-        os.ftruncate(fd, size)
-        return cls(fd=fd, cookie=cls._COOKIE)
+        name = _make_filename(shift).encode('utf-8')
+        fd = libc.memfd_create(name, os.O_RDWR)
+        os.ftruncate(fd, 1 << shift)
+        return cls(fd=fd, name=name, cookie=cls._COOKIE)
 
     @classmethod
-    def _create_win32(cls, size):
+    def _create_win32(cls, shift):
         import _winapi
-        while True:
-            temp_name = _make_filename()
-            # Create and reserve shared memory block with this name
-            # until it can be attached to by mmap.
-            h_map = _winapi.CreateFileMapping(
-                _winapi.INVALID_HANDLE_VALUE,
-                _winapi.NULL,
-                _winapi.PAGE_READWRITE,
-                (size >> 32) & 0xFFFFFFFF,
-                size & 0xFFFFFFFF,
-                temp_name
-            )
-            try:
-                last_error_code = _winapi.GetLastError()
-                if last_error_code == _winapi.ERROR_ALREADY_EXISTS:
-                    continue
-                return cls(name=temp_name, cookie=cls._COOKIE)
-            finally:
-                _winapi.CloseHandle(h_map)
+
+        map_name = _make_filename(shift)
+        h_map = _winapi.CreateFileMapping(
+            _winapi.INVALID_HANDLE_VALUE,
+            _winapi.NULL,
+            _winapi.PAGE_READWRITE,
+            ((1 << shift) >> 32) & 0xFFFFFFFF,
+            (1 << shift) & 0xFFFFFFFF,
+            map_name,
+        )
+        try:
+            return cls(name=map_name, cookie=cls._COOKIE)
+        finally:
+            _winapi.CloseHandle(h_map)
 
     def __init__(self, fd=None, name=None, cookie=None):
         if cookie is not self._COOKIE:
@@ -96,20 +94,10 @@ class SharedMemory:
             import _winapi
             # Dynamically determine the existing named shared memory
             # block's size which is likely a multiple of mmap.PAGESIZE.
-            h_map = _winapi.OpenFileMapping(
-                _winapi.FILE_MAP_READ,
-                False,
-                name
-            )
+            h_map = _winapi.OpenFileMapping(_winapi.FILE_MAP_READ, False, name)
 
             try:
-                p_buf = _winapi.MapViewOfFile(
-                    h_map,
-                    _winapi.FILE_MAP_READ,
-                    0,
-                    0,
-                    0
-                )
+                p_buf = _winapi.MapViewOfFile(h_map, _winapi.FILE_MAP_READ, 0, 0, 0)
             finally:
                 _winapi.CloseHandle(h_map)
             size = _winapi.VirtualQuerySize(p_buf)
@@ -118,55 +106,103 @@ class SharedMemory:
         self._size = size
         self._buf = memoryview(self._mmap)
 
-    def __del__(self):
-        try:
-            self.close()
-        except OSError:
-            pass
-
-    def __reduce__(self):
-        if os.name == 'posix':
-            return (
-                self._rebuild_fd,
-                (os.getpid(), self._fd),
-            )
-        else:
-            return (
-                self._rebuild_win32,
-                (self._name, ),
-            )
-
-    @classmethod
-    def _rebuild_fd(cls, pid, fd):
-        fd = os.open(f'/proc/{pid}/fd/{fd}', os.O_RDWR)
-        return cls(fd=fd, cookie=cls._COOKIE)
-
-    @classmethod
-    def _rebuild_win32(cls, name):
-        return cls(name=name, cookie=cls._COOKIE)
-
-    def __repr__(self):
-        return f'{self.__class__.__name__}({self.name!r}, size={self.size})'
-
     @property
-    def buf(self):
-        "A memoryview of contents of the shared memory block."
+    def view(self):
+        assert self._buf
         return self._buf
 
     @property
-    def name(self):
-        return self._name
+    def mem_id(self):
+        if os.name == 'posix':
+            return os.getpid(), self._fd
+        else:
+            return self._name
 
-    @property
-    def size(self):
-        "Size in bytes."
-        return self._size
+    @classmethod
+    def rebuild(cls, mem_id: SharedMemoryId):
+        if os.name == 'posix':
+            assert isinstance(mem_id, tuple)
+            pid, fd = mem_id
+            fd = os.open(f'/proc/{pid}/fd/{fd}', os.O_RDWR)
+            return cls(fd=fd, cookie=cls._COOKIE)
+        else:
+            assert isinstance(mem_id, str)
+            return cls(name=mem_id, cookie=cls._COOKIE)
 
-    def close(self):
-        """Closes access to the shared memory from this instance but does
-        not destroy the shared memory block."""
-        self._buf = None
-        self._mmap = None
-        if os.name == 'posix' and self._fd >= 0:
-            os.close(self._fd)
-            self._fd = -1
+    def __repr__(self):
+        return f'{self.__class__.__name__}({self._name!r}, size={self._size})'
+
+
+
+@dataclass
+class Fragment:
+    arena: SharedMemoryId
+    offset: int
+    size: int
+
+
+@dataclass
+class Arena:
+    mem: SharedMemory
+    current: int
+
+
+class Hoarder:
+
+    def __init__(self):
+        self.shift = 30
+        self.arenas: List[Arena] = []
+        self.lock = threading.RLock()
+
+    def put(self, data: 'bytes | memoryview | UntypedStorage', align=16):
+        import overmind._C
+        from torch import UntypedStorage
+
+        with self.lock:
+            size = len(data)
+
+            for (i, arena) in enumerate(self.arenas):
+                current = (arena.current + align - 1) & ~(align - 1)
+
+                if len(arena.mem.view) - current < size:
+                    continue
+
+                # log.debug(
+                #     'Hoarder: Fragment size = %s, chosen arena = %s, arena_current = %x, aligned_current = %x',
+                #     size, i, arena.current, current,
+                # )
+
+                arena.current = current + size
+                memory = arena.mem.view[current:current + size]
+                if isinstance(data, UntypedStorage):
+                    # Special method to speed up things
+                    assert data.device.type == 'cpu'
+                    overmind._C._memcpy_from_untyped_storage(memory, data)
+                else:
+                    memory[:] = data
+                return Fragment(arena=arena.mem.mem_id, offset=current, size=size)
+            else:
+                self.shift += 1
+                log.debug('Hoarder: Creating new arena with shift = %s', self.shift)
+                self.arenas.append(Arena(
+                    mem=SharedMemory.create(self.shift),
+                    current=0,
+                ))
+                return self.put(data, align)
+
+
+class Borrower:
+
+    def __init__(self):
+        self.arenas = {}
+
+    def borrow(self, fragment: Fragment):
+        if fragment.arena not in self.arenas:
+            self.arenas[fragment.arena] = SharedMemory.rebuild(fragment.arena)
+
+        mem = self.arenas[fragment.arena]
+        return mem.view[fragment.offset:fragment.offset + fragment.size].toreadonly()
+
+
+hoarder = Hoarder()
+borrower = Borrower()
