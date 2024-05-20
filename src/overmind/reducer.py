@@ -4,6 +4,8 @@
 from _thread import _local
 from multiprocessing.reduction import ForkingPickler
 import io
+from functools import lru_cache
+import logging
 import zipfile
 
 # -- third party --
@@ -11,10 +13,12 @@ import dill
 
 # -- own --
 from .shmem import Fragment
-from .utils.misc import hook
 
 
 # -- code --
+log = logging.getLogger(__name__)
+
+
 class OvermindPickler(dill.Pickler):
 
     def __init__(self, file):
@@ -99,10 +103,18 @@ def _reduce_storage(storage):
         return (_rebuild_storage_on_client, (frag, device))
 
 
+@lru_cache(1)
+def _warn_requires_grad():
+    log.warning(
+        "Tensors with requires_grad=True does not make sense in overmind, will be set to False automatically. "
+        "Subsequent warnings will be suppressed."
+    )
+
+
 def _reduce_tensor(tensor):
     # Copied from torch.multiprocessing.reductions, with modifications
     # - CUDA sharing is removed
-    # - Requires requires_grad == False
+    # - Sets requires_grad == False
 
     from torch.multiprocessing.reductions import check_serializing_named_tensor, rebuild_tensor
     import torch.utils.hooks
@@ -110,9 +122,7 @@ def _reduce_tensor(tensor):
     storage = tensor._typed_storage()
 
     if tensor.requires_grad:
-        raise RuntimeError(
-            "Tensors with requires_grad=True does not make sense in overmind, please fix it"
-        )
+        _warn_requires_grad()
 
     check_serializing_named_tensor(tensor)
     torch.utils.hooks.warn_if_has_hooks(tensor)
@@ -122,7 +132,7 @@ def _reduce_tensor(tensor):
         tensor.storage_offset(),
         tensor.size(),
         tensor.stride(),
-        tensor.requires_grad,
+        False and tensor.requires_grad,
     )
     return (rebuild_tensor, (type(tensor), storage, metadata))
 

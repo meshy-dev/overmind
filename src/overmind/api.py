@@ -16,11 +16,10 @@ import time
 import types
 
 # -- third party --
-import torch.multiprocessing as mp
 
 # -- own --
 from . import common
-from .common import OvermindEnv, ServiceExceptionInfo, key_of
+from .common import OvermindEnv, ServiceExceptionInfo, key_of, display_of
 from .utils.misc import hook
 
 
@@ -160,8 +159,13 @@ class OvermindClient:
             # This makes pickle happy
             fn = (fn.__module__, fn.__name__)
 
+        b4 = time.time()
         b: bytes = self._call('load', fn, args, kwargs)
-        return Pickler.loads(Pickler.loads(b))
+        rpc_time = time.time() - b4
+        obj = Pickler.loads(Pickler.loads(b))
+        disp = display_of(fn, args, kwargs)
+        log.debug(f'Loaded {disp} in {time.time() - b4:.3f}s (rpc: {rpc_time:.3f}s)')
+        return obj
 
 
 om = OvermindClient()
