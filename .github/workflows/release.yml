@@ -1,0 +1,31 @@
+name: Release
+
+on:
+  release:
+    types: [released]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  build_and_push_to_internal:
+    name: Build and Push to Internal PyPI
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Build Wheel
+        run: |
+          set -x
+          export TWINE_USERNAME=pypi-upload
+          export TWINE_PASSWORD=${{ secrets.TWINE_PASSWORD }}
+          export TWINE_REPOSITORY_URL=https://nexus.meshy.ai/repository/pypi/
+          export TWINE_NON_INTERACTIVE='true'
+          pip install --upgrade pip pdm twine torch==2.1.2
+          pdm build
+          echo python3 -m twine upload dist/*.whl
