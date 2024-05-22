@@ -20,7 +20,7 @@ overmind-shutdown= "overmind.cli:shutdown"
 overmind-drop-shell= "overmind.cli:drop_shell"
 
 [build-system]
-requires = ["pdm-backend", "torch"]
+requires = ["pdm-backend", "torch==2.1.2", "setuptools<70.0.0", "numpy"]
 build-backend = "pdm.backend"
 
 [tool.pdm]
