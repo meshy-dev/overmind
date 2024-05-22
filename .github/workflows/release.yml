@@ -34,7 +34,7 @@ jobs:
       - name: Release to PyPI
         if: ${{ github.event_name == 'release' }}
         run: |
-          echo python3 -m twine upload dist/*.whl
+          python3 -m twine upload dist/*.whl
 
   build_windows:
     name: Build and Push (Windows)
@@ -60,4 +60,4 @@ jobs:
       - name: Release to PyPI
         if: ${{ github.event_name == 'release' }}
         run: |
-          echo python3 -m twine upload dist/*.whl
+          python3 -m twine upload dist/*.whl
