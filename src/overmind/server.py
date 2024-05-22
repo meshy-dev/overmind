@@ -39,7 +39,9 @@ class OvermindService:
         if isinstance(v, tuple):
             # This makes pickle happy
             m, n = v
-            fn = getattr(importlib.import_module(m), n)
+            fn = importlib.import_module(m)
+            for a in n.split('.'):
+                fn = getattr(fn, a)
         else:
             fn = v
 
