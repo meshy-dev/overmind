@@ -155,16 +155,16 @@ class OvermindClient:
 
         self._init_client()
 
+        disp = display_of(fn, args, kwargs)
+
         if isinstance(fn, types.FunctionType):
-            # This makes pickle happy
-            fn = (fn.__module__, fn.__name__)
+            fn = (fn.__module__, fn.__qualname__)
 
         b4 = time.time()
         b: bytes = self._call('load', fn, args, kwargs)
         rpc_time = time.time() - b4
         obj = Pickler.loads(Pickler.loads(b))
-        disp = display_of(fn, args, kwargs)
-        log.debug(f'Loaded {disp} in {time.time() - b4:.3f}s (rpc: {rpc_time:.3f}s)')
+        log.info(f'Loaded {disp} in {time.time() - b4:.3f}s (rpc: {rpc_time:.3f}s)')
         return obj
 
 
@@ -172,7 +172,8 @@ om = OvermindClient()
 load = om.load
 
 
-def monkey_patch(modulename, clsname, method):
+@lru_cache(None)
+def monkey_patch(spec):
     if common.IN_OVERMIND_SERVER:
         return
 
@@ -180,17 +181,41 @@ def monkey_patch(modulename, clsname, method):
         return
 
     try:
+        modulename, attrname = spec.split('::')
         module = importlib.import_module(modulename)
-        if clsname is None:
-            cls = module
+
+        if '.' in attrname:
+            clsname, method = attrname.split('.')
+            target = getattr(module, clsname)
+            name = method
         else:
-            cls = getattr(module, clsname)
+            target = module
+            name = attrname
     except (ModuleNotFoundError, AttributeError):
-        log.info(f'Could not import {modulename}.{clsname}, skipping monkey patching')
+        log.warn(f'Could not find {spec}, monkey patching skipped')
         return
 
-    hook(cls, name=method)(load)
-    log.info(f'Patched {modulename}.{clsname}.{method}')
+    hook(target, name=name)(load)
+    log.info(f'Patched {spec}')
+
+
+@lru_cache(None)
+def monkey_patch_from_config_file(path):
+    path = Path(path)
+
+    if not path.exists():
+        log.warning(f'Config file {path} does not exist, skipping monkey patching')
+        return
+
+    log.info(f':: Patching from config file {path}')
+
+    lines = path.read_text().splitlines()
+    lines = [line.strip() for line in lines]
+    lines = [line for line in lines if line and not line.startswith('#')]
+
+    for spec in lines:
+        monkey_patch(spec)
+
 
 
 @lru_cache(1)
@@ -202,22 +227,23 @@ def monkey_patch_all():
         log.warning('overmind disabled by OVERMIND_DISABLE env variable, not monkey patching')
         return
 
-    monkey_patch('diffusers.pipelines.pipeline_utils',   'DiffusionPipeline',           'from_pretrained')
-    monkey_patch('diffusers.models.modeling_utils',      'ModelMixin',                  'from_pretrained')
-    monkey_patch('diffusers.schedulers.scheduler_utils', 'SchedulerMixin',              'from_pretrained')
-    monkey_patch('diffusers.loaders.single_file',        'FromSingleFileMixin',         'from_single_file')
-    monkey_patch('diffusers.loaders.single_file',        'FromOriginalVAEMixin',        'from_single_file')
-    monkey_patch('diffusers.loaders.single_file',        'FromOriginalControlnetMixin', 'from_single_file')
-    monkey_patch('transformers.modeling_utils',          'PreTrainedModel',             'from_pretrained')
-    monkey_patch('transformers.tokenization_utils_base', 'PreTrainedTokenizerBase',     'from_pretrained')
-    monkey_patch('transformers',                         'AutoProcessor',               'from_pretrained')
-    monkey_patch('transformers',                         None,                          'pipeline')
-    monkey_patch('torchvision.models.vgg',               None,                          'vgg19')
-    monkey_patch('torchvision.models.vgg',               None,                          'vgg16')
-    monkey_patch('open_clip',                            None,                          'create_model_and_transforms')
-    monkey_patch('safetensors.torch',                    None,                          'load_file')
-    monkey_patch('torch',                                None,                          'load')
-    monkey_patch('torch.jit',                            None,                          'load')
+    from .assets import assets
+
+    monkey_patch_from_config_file(assets / 'predefined.cfg')
+
+    caller = sys._getframe(1).f_code.co_filename
+    try:
+        caller = Path(caller)
+        if not caller.exists():
+            return
+        path = caller.resolve().parent
+    except Exception:
+        return
+
+    while (path / '__init__.py').exists():
+        if (cfg := path / 'overmind.cfg').exists():
+            monkey_patch_from_config_file(cfg)
+        path = path.parent
 
 
 def diffusers_dyn_module_workaround():
