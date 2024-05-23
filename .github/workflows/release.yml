@@ -56,8 +56,8 @@ jobs:
       - name: Release to PyPI
         if: ${{ github.event_name == 'release' }}
         run: |
-          export TWINE_USERNAME=pypi-upload
-          export TWINE_PASSWORD=${{ secrets.TWINE_PASSWORD }}
-          export TWINE_REPOSITORY_URL=https://nexus.meshy.ai/repository/pypi/
-          export TWINE_NON_INTERACTIVE='true'
+          $env:TWINE_USERNAME="pypi-upload"
+          $env:TWINE_PASSWORD="${{ secrets.TWINE_PASSWORD }}"
+          $env:TWINE_REPOSITORY_URL="https://nexus.meshy.ai/repository/pypi/"
+          $env:TWINE_NON_INTERACTIVE="true"
           python3 -m twine upload dist/*.whl
