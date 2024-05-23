@@ -24,16 +24,16 @@ jobs:
       - name: Build Wheel
         run: |
           set -x
-          export TWINE_USERNAME=pypi-upload
-          export TWINE_PASSWORD=${{ secrets.TWINE_PASSWORD }}
-          export TWINE_REPOSITORY_URL=https://nexus.meshy.ai/repository/pypi/
-          export TWINE_NON_INTERACTIVE='true'
           pip install --upgrade pip
           pip install -U pdm twine torch==2.1.2 setuptools
           pdm build -vv
       - name: Release to PyPI
         if: ${{ github.event_name == 'release' }}
         run: |
+          export TWINE_USERNAME=pypi-upload
+          export TWINE_PASSWORD=${{ secrets.TWINE_PASSWORD }}
+          export TWINE_REPOSITORY_URL=https://nexus.meshy.ai/repository/pypi/
+          export TWINE_NON_INTERACTIVE='true'
           python3 -m twine upload dist/*.whl
 
   build_windows:
@@ -50,14 +50,14 @@ jobs:
       - name: Build Wheel
         run: |
           $env:PATH="$env:APPDATA\Python\Library\Bin;$env:PATH"
-          $env:TWINE_USERNAME='pypi-upload'
-          $env:TWINE_PASSWORD='${{ secrets.TWINE_PASSWORD }}'
-          $env:TWINE_REPOSITORY_URL='https://nexus.meshy.ai/repository/pypi/'
-          $env:TWINE_NON_INTERACTIVE='true'
           pip install --upgrade pip
           pip install -U pdm twine torch==2.1.2 setuptools
           pdm build -vv
       - name: Release to PyPI
         if: ${{ github.event_name == 'release' }}
         run: |
+          export TWINE_USERNAME=pypi-upload
+          export TWINE_PASSWORD=${{ secrets.TWINE_PASSWORD }}
+          export TWINE_REPOSITORY_URL=https://nexus.meshy.ai/repository/pypi/
+          export TWINE_NON_INTERACTIVE='true'
           python3 -m twine upload dist/*.whl
