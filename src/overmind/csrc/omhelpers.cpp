@@ -39,6 +39,100 @@ struct imemstream: virtual membuf, std::istream {
     }
 };
 
+inline static uint64_t rotate_right(uint64_t v, unsigned k)
+{
+    return (v >> k) | (v << (64 - k));
+}
+
+inline static uint64_t read_u64(const void * const ptr)
+{
+    return static_cast<uint64_t>(*reinterpret_cast<const uint64_t*>(ptr));
+}
+
+inline static uint64_t read_u32(const void * const ptr)
+{
+    return static_cast<uint64_t>(*reinterpret_cast<const uint32_t*>(ptr));
+}
+
+inline static uint64_t read_u16(const void * const ptr)
+{
+    return static_cast<uint64_t>(*reinterpret_cast<const uint16_t*>(ptr));
+}
+
+inline static uint64_t read_u8 (const void * const ptr)
+{
+    return static_cast<uint64_t>(*reinterpret_cast<const uint8_t *>(ptr));
+}
+
+uint64_t metrohash64_1(const uint8_t * key, uint64_t len, uint32_t seed)
+{
+    static const uint64_t k0 = 0xC83A91E1;
+    static const uint64_t k1 = 0x8648DBDB;
+    static const uint64_t k2 = 0x7BDEC03B;
+    static const uint64_t k3 = 0x2F5870A5;
+
+    const uint8_t * ptr = reinterpret_cast<const uint8_t*>(key);
+    const uint8_t * const end = ptr + len;
+
+    uint64_t hash = ((static_cast<uint64_t>(seed) + k2) * k0) + len;
+
+    if (len >= 32) {
+        uint64_t v[4];
+        v[0] = hash;
+        v[1] = hash;
+        v[2] = hash;
+        v[3] = hash;
+
+        do {
+            v[0] += read_u64(ptr) * k0; ptr += 8; v[0] = rotate_right(v[0],29) + v[2];
+            v[1] += read_u64(ptr) * k1; ptr += 8; v[1] = rotate_right(v[1],29) + v[3];
+            v[2] += read_u64(ptr) * k2; ptr += 8; v[2] = rotate_right(v[2],29) + v[0];
+            v[3] += read_u64(ptr) * k3; ptr += 8; v[3] = rotate_right(v[3],29) + v[1];
+        } while (ptr <= (end - 32));
+
+        v[2] ^= rotate_right(((v[0] + v[3]) * k0) + v[1], 33) * k1;
+        v[3] ^= rotate_right(((v[1] + v[2]) * k1) + v[0], 33) * k0;
+        v[0] ^= rotate_right(((v[0] + v[2]) * k0) + v[3], 33) * k1;
+        v[1] ^= rotate_right(((v[1] + v[3]) * k1) + v[2], 33) * k0;
+        hash += v[0] ^ v[1];
+    }
+
+    if ((end - ptr) >= 16) {
+        uint64_t v0 = hash + (read_u64(ptr) * k0); ptr += 8; v0 = rotate_right(v0,33) * k1;
+        uint64_t v1 = hash + (read_u64(ptr) * k1); ptr += 8; v1 = rotate_right(v1,33) * k2;
+        v0 ^= rotate_right(v0 * k0, 35) + v1;
+        v1 ^= rotate_right(v1 * k3, 35) + v0;
+        hash += v1;
+    }
+
+    if ((end - ptr) >= 8) {
+        hash += read_u64(ptr) * k3; ptr += 8;
+        hash ^= rotate_right(hash, 33) * k1;
+    }
+
+    if ((end - ptr) >= 4) {
+        hash += read_u32(ptr) * k3; ptr += 4;
+        hash ^= rotate_right(hash, 15) * k1;
+    }
+
+    if ((end - ptr) >= 2) {
+        hash += read_u16(ptr) * k3; ptr += 2;
+        hash ^= rotate_right(hash, 13) * k1;
+    }
+
+    if ((end - ptr) >= 1) {
+        hash += read_u8 (ptr) * k3;
+        hash ^= rotate_right(hash, 25) * k1;
+    }
+
+    hash ^= rotate_right(hash, 33);
+    hash *= k0;
+    hash ^= rotate_right(hash, 33);
+
+    return hash;
+}
+
+
 void initOvermindHelpers(py::module m) {
     m.def("_make_untyped_storage", [](py::buffer b) {
         py::buffer_info info = b.request();
@@ -94,6 +188,34 @@ void initOvermindHelpers(py::module m) {
                 /*load_debug_files*/ true,
                 /*restore_shapes*/ false);
             return ret;
+        }
+    );
+    m.def(
+        "_hash_untyped_storage",
+        [](py::handle src) {
+            auto UntypedStorage = py::module::import("torch").attr("UntypedStorage");
+
+            if (!py::isinstance(src, UntypedStorage)) {
+                throw py::type_error("Source must be an UntypedStorage");
+            }
+
+            auto src_storage = reinterpret_cast<THPStorage*>(src.ptr());
+            auto src_storage_impl = src_storage->cdata;
+            auto src_ptr = src_storage_impl->data_ptr().get();
+            auto src_size = src_storage_impl->nbytes();
+            return metrohash64_1((const uint8_t*)src_ptr, src_size, 233);
+        }
+    );
+    m.def(
+        "_hash_buffer",
+        [](py::buffer buffer) {
+            auto info = buffer.request();
+
+            if (info.itemsize != 1) throw py::type_error("Buffer item size must be 1");
+            if (info.ndim != 1) throw py::type_error("Buffer must be 1-dimensional");
+            if (info.format != "B") throw py::type_error("Buffer format must be 'B'");
+
+            return metrohash64_1((const uint8_t*)info.ptr, info.size, 233);
         }
     );
     m.def(
