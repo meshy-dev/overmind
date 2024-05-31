@@ -2,7 +2,7 @@
 
 # -- stdlib --
 from dataclasses import dataclass
-from typing import List, TYPE_CHECKING, Tuple
+from typing import List, TYPE_CHECKING, Tuple, Dict
 import base64
 import logging
 import ctypes
@@ -152,11 +152,20 @@ class Hoarder:
     def __init__(self):
         self.shift = 30
         self.arenas: List[Arena] = []
+        self.fragments: Dict[int, Fragment] = {}
         self.lock = threading.RLock()
 
     def put(self, data: 'bytes | memoryview | UntypedStorage', align=16):
         import overmind._C
         from torch import UntypedStorage
+
+        if isinstance(data, UntypedStorage):
+            digest = overmind._C._hash_untyped_storage(data)
+        else:
+            digest = overmind._C._hash_buffer(data)
+
+        if digest in self.fragments:
+            return self.fragments[digest]
 
         with self.lock:
             size = len(data)
@@ -180,7 +189,9 @@ class Hoarder:
                     overmind._C._memcpy_from_untyped_storage(memory, data)
                 else:
                     memory[:] = data
-                return Fragment(arena=arena.mem.mem_id, offset=current, size=size)
+                frag = Fragment(arena=arena.mem.mem_id, offset=current, size=size)
+                self.fragments[digest] = frag
+                return frag
             else:
                 self.shift += 1
                 log.debug('Hoarder: Creating new arena with shift = %s', self.shift)
