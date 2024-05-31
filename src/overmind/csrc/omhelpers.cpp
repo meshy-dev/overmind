@@ -1,6 +1,7 @@
 #include <torch/extension.h>
 
 #include "pybind11/buffer_info.h"
+#include "pybind11/gil.h"
 #include "pybind11/pytypes.h"
 
 #include <torch/csrc/Storage.h>
@@ -135,23 +136,24 @@ uint64_t metrohash64_1(const uint8_t * key, uint64_t len, uint32_t seed)
 
 void initOvermindHelpers(py::module m) {
     m.def("_make_untyped_storage", [](py::buffer b) {
-        py::buffer_info info = b.request();
+        auto info = new py::buffer_info(b.request());
 
-        if (info.itemsize != 1) throw py::type_error("Buffer item size must be 1");
-        if (info.ndim != 1) throw py::type_error("Buffer must be 1-dimensional");
-        if (info.format != "B") throw py::type_error("Buffer format must be 'B'");
+        if (info->itemsize != 1) throw py::type_error("Buffer item size must be 1");
+        if (info->ndim != 1) throw py::type_error("Buffer must be 1-dimensional");
+        if (info->format != "B") throw py::type_error("Buffer format must be 'B'");
 
-        auto size = info.size;
-        auto ptr = info.ptr;
+        auto size = info->size;
+        auto ptr = info->ptr;
 
-        return py::handle(THPStorage_New(
+        return pybind11::reinterpret_steal<py::object>(THPStorage_New(
             c10::make_intrusive<at::StorageImpl>(
                 c10::StorageImpl::use_byte_size_t(),
                 size,
                 at::DataPtr(
                     ptr,
-                    new py::buffer_info(std::move(info)),
+                    info,
                     [](void* ptr) {
+                        py::gil_scoped_acquire gil;
                         auto b = static_cast<py::buffer_info*>(ptr);
                         delete b;
                     },

@@ -5,10 +5,12 @@ from multiprocessing.connection import Connection, Listener
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
 import argparse
+import base64
 import gc
 import importlib
 import logging
 import os
+import random
 import sys
 import threading
 import time
@@ -17,7 +19,8 @@ import traceback
 # -- third party --
 # -- own --
 from .common import OvermindEnv, ServiceExceptionInfo, display_of, key_of
-from .reducer import OvermindPickler
+from .reducer import OvermindPickler, OvermindRef
+from .utils.misc import walk_obj
 
 
 # -- code --
@@ -104,13 +107,20 @@ class OvermindService:
 
             log.info('Cold load model %s', disp)
             b4 = time.time()
+            fn, args, kwargs = self._pre_transform((fn, args, kwargs))
             model = fn(*args, **kwargs)
+            model = self._post_transform(model)
+            reuse_key = base64.b32encode(random.randbytes(5)).decode('utf-8')
+            try:
+                model.__dict__['_overmind_ref'] = OvermindRef(key=reuse_key, disp=disp)
+            except AttributeError:
+                pass
 
-            model = self._transform(model)
             log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
 
             b4 = time.time()
             self._models[key] = OvermindPickler.dumps(OvermindPickler.dumps(model))  # Double pickle, saving pickle to shared mem too!
+            self._models[reuse_key] = self._models[key]
             log.info('Pickled in %.3fs, size = %s bytes', time.time() - b4, len(self._models[key]))
 
             self._models_disp.append(disp)
@@ -122,75 +132,40 @@ class OvermindService:
 
             return self._models[key]
 
-    def _transform(self, model):
-        model = self._set_no_grad(model)
-        model = self._walk_generic_thing(model)
-        return model
+    def _pre_transform(self, model):
+        from multiprocessing.reduction import ForkingPickler as Pickler
 
-    def _set_no_grad(self, model):
-        import torch
-        if not isinstance(model, torch.nn.Module):
-            return model
+        def pre_transform(m):
+            if isinstance(m, OvermindRef):
+                m = Pickler.loads(Pickler.loads(self._models[m.key]))
+                return False, m
+            return True, m
 
-        for p in model.parameters():
-            p.requires_grad = False
+        return walk_obj(model, pre=pre_transform)
 
-        return model
-
-    def _walk_generic_thing(self, obj):
+    def _post_transform(self, model):
         import torch
 
-        seen = set()
-        ref = []
+        def post_transform(m):
+            if not isinstance(m, torch.nn.Module):
+                return True, m
 
-        def walk(m):
-            if id(m) in seen:
-                return m
+            # Remove AlignDevices hooks
+            from accelerate.hooks import remove_hook_from_module
+            remove_hook_from_module(m, True)
 
-            ref.append(m)
-            seen.add(id(m))
+            # Remove accelerate added warning hooks (interferes pickling)
+            m.__dict__.pop('to', None)
+            m.__dict__.pop('cuda', None)
+            m.__dict__.pop('xpu', None)
+            m.__dict__.pop('npu', None)
 
-            if isinstance(m, torch.nn.Module):
-                m = self._remove_accelerate_hooks(m)
-            elif isinstance(m, list):
-                for i, v in enumerate(m):
-                    m[i] = walk(v)
-            elif isinstance(m, tuple):
-                m = m.__class__(walk(v) for v in m)
-            elif isinstance(m, dict):
-                for k, v in m.items():
-                    m[k] = walk(v)
-            elif (d := getattr(m, '__dict__', None)) is not None:
-                for k, v in d.items():
-                    d[k] = walk(v)
-            elif (keys := getattr(m, '__slots__', None)) is not None:
-                for k in keys:
-                    setattr(m, k, walk(getattr(m, k)))
+            for p in m.parameters():
+                p.requires_grad = False
 
-            ref.append(m)
-            seen.add(id(m))  # not a duplicate, m may has changed
+            return False, m
 
-            return m
-
-        return walk(obj)
-
-    def _remove_accelerate_hooks(self, model):
-        import torch
-
-        if not isinstance(model, torch.nn.Module):
-            return model
-
-        # Remove AlignDevices hooks
-        from accelerate.hooks import remove_hook_from_module
-        remove_hook_from_module(model, True)
-
-        # Remove accelerate added warning hooks (interferes pickling)
-        model.__dict__.pop('to', None)
-        model.__dict__.pop('cuda', None)
-        model.__dict__.pop('xpu', None)
-        model.__dict__.pop('npu', None)
-
-        return model
+        return walk_obj(model, pre=post_transform)
 
     def exposed_shutdown(self):
         log.info('!! Bye')
@@ -221,9 +196,11 @@ class ThreadedServer:
     def _serve(self, client: Connection):
         try:
             while True:
-                fn, args, kwargs = client.recv()
-                f = getattr(self.service, f'exposed_{fn}')
+                req = client.recv()
+                fn = '<unknown>'
                 try:
+                    fn, args, kwargs = req
+                    f = getattr(self.service, f'exposed_{fn}')
                     ret = f(*args, **kwargs)
                 except Exception as e:
                     log.exception(f'Error calling {fn}')
@@ -234,8 +211,6 @@ class ThreadedServer:
                 client.send(ret)
         except (EOFError, OSError):
             pass
-        except Exception:
-            log.exception('Serve error')
 
 
 def main():
