@@ -20,7 +20,7 @@ import types
 # -- own --
 from . import common
 from .common import OvermindEnv, ServiceExceptionInfo, key_of, display_of
-from .utils.misc import hook
+from .utils.misc import hook, walk_obj
 
 
 # -- code --
@@ -155,6 +155,12 @@ class OvermindClient:
 
         self._init_client()
 
+        def replace_ref(obj):
+            if (ref := getattr(obj, '_overmind_ref', None)):
+                return False, ref
+            return True, obj
+
+        fn, args, kwargs = walk_obj((fn, args, kwargs), pre=replace_ref)
         disp = display_of(fn, args, kwargs)
 
         if isinstance(fn, types.FunctionType):

@@ -61,3 +61,58 @@ def hook(target, name=None):
         return real_hooker
 
     return inner
+
+
+def walk_obj(obj, pre=None, post=None):
+    nop = lambda x: x
+    pre = pre or nop
+    post = post or nop
+
+    seen = set()
+    ref = []
+
+    def walk(m):
+        if id(m) in seen:
+            return m
+
+        ref.append(m)
+        seen.add(id(m))
+
+        recurse, m = pre(m)
+
+        if id(m) not in seen:
+            ref.append(m)
+            seen.add(id(m))
+
+
+        if recurse:
+            if isinstance(m, type):
+                pass
+            elif isinstance(m, list):
+                for i, v in enumerate(m):
+                    m[i] = walk(v)
+            elif isinstance(m, tuple):
+                m = m.__class__(walk(v) for v in m)
+            elif isinstance(m, dict):
+                for k, v in m.items():
+                    m[k] = walk(v)
+            elif (d := getattr(m, '__dict__', None)) is not None:
+                for k, v in d.items():
+                    d[k] = walk(v)
+            elif (keys := getattr(m, '__slots__', None)) is not None:
+                for k in keys:
+                    setattr(m, k, walk(getattr(m, k)))
+
+        if id(m) not in seen:
+            ref.append(m)
+            seen.add(id(m))
+
+        m = post(m)
+
+        if id(m) not in seen:
+            ref.append(m)
+            seen.add(id(m))
+
+        return m
+
+    return walk(obj)

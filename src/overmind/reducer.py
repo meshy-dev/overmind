@@ -2,9 +2,10 @@
 
 # -- stdlib --
 from _thread import _local
+from dataclasses import dataclass
+from functools import lru_cache
 from multiprocessing.reduction import ForkingPickler
 import io
-from functools import lru_cache
 import logging
 import zipfile
 
@@ -17,6 +18,15 @@ from .shmem import Fragment
 
 # -- code --
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class OvermindRef:
+    key: str
+    disp: str
+
+    def __repr__(self):
+        return f'<{self.key} &{self.disp}>'
 
 
 class OvermindPickler(dill.Pickler):
