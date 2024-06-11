@@ -124,20 +124,25 @@
 3. 如何解决了问题，效果比对
     1. img3d cold vs hot
 4. 如何使用
-    1. do nothing
+    1. monkey patch
+        3. overmind.cfg
     2. explicitly load
+    4. memoryview
 5. 如何开始的，（torch shared mem）
 6. 核心原理
     mermaid graph
+演进
+    1. ! cpu only
 7. 遇到的坑
-    3. vae 的 pattern
-    2. diffusers dyn module
-    1. bitsandbytes
-    others
+    1. diffusers dyn module
+    2. vae 的 pattern
+    3. bitsandbytes
+    4. stable fast
+    others (eng
         2. pickle quirks
         2. socket path
         1. feature gate (thx to ksf)
-8. 之后可能的改进
+8. 大重构
     1. drop torch shared mem
         1. can cache pickle result
         2. reduce fd usage
