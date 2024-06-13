@@ -113,7 +113,7 @@
                         data = overmind.api.load(load_bulky_data, '23333')
                     </code></pre>
                 </section>
-                <section>
+                <section data-auto-animate>
                     <h3>如何工作</h3>
                     <p>(Oversimplified)</p>
                     <ul>
@@ -123,8 +123,9 @@
                         <li>把结果再 pickle 一下返回给 client</li>
                     </ul>
                 </section>
-                <section>
-                    <h3>如何工作 (cont.)</h3>
+                <section data-auto-animate>
+                    <h3>如何工作</h3>
+                    <p>(Oversimplified)</p>
                     <ul>
                         <li>把函数和参数都 pickle 起来，发一个 RPC 给 overmind daemon</li>
                         <li>发现同样的函数和参数之前调用过了</li>
