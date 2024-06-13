@@ -14,7 +14,7 @@
 		<!-- Theme used for syntax highlighted code -->
 		<link rel="stylesheet" href="plugin/highlight/monokai.css">
         <style>
-            h2, h3 {
+            h2, h3, h4, h5 {
                 text-transform: none !important;
             }
             .reveal pre code {
@@ -445,15 +445,78 @@
                     <h3>支持 stable-fast</h3>
                     <ul>
                         <li>纯 Python 代码解决不了的性能问题</li>
+                        <li>更多的 pickle 处理不了的东西</li>
+                        <li>为 stable-fast 自己的 hacks 擦屁股</li>
                     </ul>
-                    <asides class="notes">
-                        <ul>
-                            <li>因为量化需要 GPU</li>
-                        </ul>
-                    </asides>
+                </section>
+                <section data-auto-animate>
+                    <h5>什么，一个 torch.jit.load 需要把整个模型复制3遍？？</h5>
+                    <img src="assets/torch-jit-load-no-memoryview.png">
+                    <ul>
+                        <li>memoryview 变成 bytes 需要一次复制</li>
+                    </ul>
+                </section>
+                <section data-auto-animate>
+                    <h5>什么，一个 torch.jit.load 需要把整个模型复制3遍？？</h5>
+                    <pre><code class="cpp" data-trim data-fragment-index="2" data-line-numbers="7|8|">
+                        // torch/csrc/jit/python/script_init.cpp
+
+                        auto m = py::handle(module).cast&lt;py::module&gt;();
+
+                        m.def(
+                          "_load_jit_module_from_bytes",
+                          [](const std::string& bytes) {
+                            auto bytes_copy = copyStr(bytes);
+                            ExtraFilesMap extra_files = ExtraFilesMap();
+                            return torch::jit::parse_and_initialize_jit_module(
+                               bytes_copy, bytes.size(), extra_files);
+                          }
+                        );
+                    </code></pre>
+                    <ul>
+                        <li class="fragment" data-fragment-index="1">第二次： bytes 变成 std::string </li>
+                        <li class="fragment" data-fragment-index="2">第三次： 为了对齐到 16 bytes，又复制了一遍</li>
+                    </ul>
+                    <p class="fragment" data-fragment-index="3" style="font-size: 0.7em">nit： 其实是两遍，因为最后没有用这个 flatbuffers 的接口，仍然是 zip 的那个，不存在最后的对齐到 16 bytes</p>
+                    <aside class="notes"><ul>
+                        <li>因为 flatbuffers 的 4GB 限制</li>
+                    </ul></aside>
+                </section>
+                <section data-auto-animate>
+                    <h5>什么，一个 torch.jit.load 需要把整个模型复制3遍？？</h5>
+                    <p>SOLUTION: 自己写一个 zero copy 版的！</p>
+                    <pre><code class="cpp" data-trim data-line-numbers="4-6,13">
+                        m.def(
+                          "import_ir_module_from_buffer_0copy",
+                          [](std::shared_ptr&lt;torch::jit::CompilationUnit&gt; cu,
+                             py::buffer buffer) {
+                            auto info = buffer.request();
+                            imemstream in((char*)info.ptr, info.size);
+
+                            c10::optional&lt;at::Device&gt; optional_device;
+                            torch::jit::ExtraFilesMap extra_files_map;
+
+                            auto ret = import_ir_module(
+                                std::move(cu),
+                                in,
+                                optional_device, extra_files_map,
+                                true, false);
+                            return ret;
+                          });
+                    </code></pre>
+                    <aside class="notes"><ul>
+                        <li>解释下 buffer protocol</li>
+                    </ul></aside>
+                </section>
+                <section data-auto-animate>
+                    <h3>去除 accelerate 添的东西</h3>
+                    <pre><code class="python" data-trim data-line-numbers="3-5|7-11">
+                    </code></pre>
+                    <aside class="notes"><ul>
+                        <li></li>
+                    </ul></aside>
                 </section>
 
-                <!---------------------------->
                 <section data-auto-animate>
                     <h3>The `vae=vae` pattern revised</h3>
                     <p>SOLUTION: 传递标记，server 端根据标记 unpickle</p>
