@@ -17,6 +17,9 @@
             h2, h3 {
                 text-transform: none !important;
             }
+            .reveal pre code {
+                max-height: 500px;
+            }
         </style>
 	</head>
 	<body>
@@ -25,14 +28,18 @@
 				<section>
                     <h2>overmind 是啥？</h2>
                     <ul class="fragment">
-                        <li>减少模型的加载时间</li>
-                        <li>最初是为了混合部署标准的 coarse 和 lowpoly coarse</li>
-                        <!--<li>翻 torch 的文档发现了 shared mem 于是觉得这个事可以搞</li>-->
+                        <li>缓存已加载的 torch models，加速模型 loading</li>
                     </ul>
                 </section>
 				<section>
                     <h3>效果比对</h3>
-                    <p>python -m meshflow.main_mvdream --config image3d/coarse.instantngp.yaml seed=1234 input=~/gun.jpg art_style=realistic</p>
+                    <pre><code class="bash" data-trim data-line-numbers="1-6|8-13">
+                        python -m meshflow.main_mvdream \
+                            --config image3d/coarse.instantngp.yaml \
+                            seed=1234 \
+                            input=~/gun.jpg \
+                            art_style=realistic
+                    </code></pre>
                     <div class="mermaid">
                         <pre>
                         %%{init: {'theme': 'dark', 'themeVariables': { 'darkMode': true }}}%%
@@ -160,10 +167,13 @@
                         import pickle
                         a = pickle.loads(pickle.loads(a))
                     </code></pre>
-                    <ul class="fragment">
-                        <li>为了支持一些复杂的情况（主要是 closure），被迫用了 dill 作为 pickler 的基座，纯 python 实现速度很慢</li>
-                        <li>因为是一次性的开销所以没有努力优化</li>
-                    </ul>
+                    <aside class="notes">
+                        <ul>
+                            <li>为了支持一些复杂的情况（主要是 closure），被迫用了 dill 作为 pickler 的基座，纯 python 实现速度很慢</li>
+                            <li>因为是一次性的开销所以没有努力优化</li>
+                            <li>cue 一下之前的图表，如果有优化 Cold 应该跟 w/o overmind 差不多时间</li>
+                        </ul>
+                    </aside>
                 </section>
                 <section data-auto-animate>
                     <h3>Pickler 里都加了哪些料？</h3>
@@ -213,11 +223,12 @@
                     <p class="fragment">绕过了 POSIX shm</p>
                     <p class="fragment">不用纠结 SCM_RIGHTS 那一坨难看的 API</p>
                     <aside class="notes">
-                        解释下 pid & fd 的 race condition
+                        解释下 pid & fd 的跨进程 race condition。
+                        扩展下 linux 下的各种奇怪的 fd 机制，signalfd, eventfd, timerfd, pidfd
                     </aside>
                 </section>
                 <section>
-                    <h3>Why reinventing the wheel?</h3>
+                    <h3>你这古法手工的轮子，它圆吗?</h3>
                     <ul>
                         <li>POSIX shm 容量有限（docker 默认给 64M）</li>
                         <li>torch 会给每个 UntypedStorage 申请一个 POSIX shm，即使只有几个字节</li>
@@ -226,8 +237,248 @@
                     </ul>
                 </section>
                 <section>
-                    <h1>一些细节</h1>
-                    <p class="fragment">aka. 遇到的坑，和特别的解决方案</p>
+                    <h1>一点细节</h1>
+                    <p>aka. 需求演进、遇到的坑 & 解决方案</p>
+                </section>
+                <section data-auto-animate>
+                    <h3>最开始是什么样子的？</h3>
+                </section>
+                <section data-auto-animate>
+                    <h3>最开始是什么样子的？</h3>
+                    <ul>
+                        <li>为了解决 refine & lowpoly-refine 混合部署</li>
+                        <li>假设模型会先 load 到 cpu 再 `xxx.to('cuda')`</li>
+                        <li>全盘使用 torch 的共享 tensor 的基础设施</li>
+                        <div class="fragment">
+                            <li>目标：尽量低的侵入性，最好是无感知</li>
+                            <li>目标：meshy & meshflow 要能跑起来</li>
+                            <li>目标：仅支持 Linux (but...)</li>
+                        </div>
+                    </ul>
+                    <aside class="notes">
+                        <ul>
+                            <li>最初就是因为发现了 torch 的 shared memory 机制，才有了 overmind 的想法 </li>
+                            <li>后面扩展到了 Windows，因为发现这玩意对 Researchers 的价值更大</li>
+                            <li>低侵入性基本做到了， guidance.imagedream_utils.model_zoo::build_model 和 TensorRT 的地方还是需要显式 load，后面被 overmind.cfg 解决</li>
+                        </ul>
+                    </aside>
+                </section>
+                <section data-auto-animate>
+                    <h3>diffusers 有个动态的 module？</h3>
+                    <ul>
+                        <li>model repo 中的 python script 会被塞到这里来</li>
+                        <li>并不在 sys.path 里，所以客户端 unpickle 的时候会找不到这个 module</li>
+                        <li>还好 diffusers 把他们按照 module 的结构写到了文件系统上！</li>
+                    </ul>
+                    <aside class="notes">
+                        解释下接下来内容都是按照实际的时间线来的
+                    </aside>
+                </section>
+                <section data-auto-animate>
+                    <h3>diffusers 有个动态的 module？</h3>
+                    <p>SOLUTION: 我先把它 import 进来！</p>
+                    <pre><code class="python" data-trim>
+                        # On client
+                        def diffusers_dyn_module_workaround():
+                            from diffusers.utils.constants import HF_MODULES_CACHE
+                            modpath = Path(HF_MODULES_CACHE)
+                            modpath = modpath / "diffusers_modules/__init__.py"
+                            spec = importlib.util.spec_from_file_location(
+                                "diffusers_modules", modpath,
+                            )
+                            mod = importlib.util.module_from_spec(spec)
+                            sys.modules["diffusers_modules"] = mod
+                    </code></pre>
+                </section>
+                <section data-auto-animate>
+                    <h3>The `vae=vae` pattern</h3>
+                    <pre><code class="python" data-trim data-line-numbers="1,10">
+                        vae = AutoencoderKL.from_pretrained(
+                            "stablediffusionapi/night-sky-yozora-sty",
+                            subfolder="vae", torch_dtype=torch.float16,
+                        )
+
+                        StableDiffusionControlNetImg2ImgPipeline.from_pretrained(
+                            checkpoint,
+                            custom_pipeline="stable_diffusion_controlnet_img2img",
+                            controlnet=[controlnet_tile, controlnet_depth],
+                            vae=vae,
+                            torch_dtype=torch.float16,
+                            safety_checker=None,
+                        )
+                    </code></pre>
+                    <ul class="fragment">
+                        <li>参数会被 pickle 下来传给 overmind（此处无共享内存），这样的调用破坏了 overmind 的目的。</li>
+                    </ul>
+                </section>
+                <section data-auto-animate>
+                    <h3>The `vae=vae` pattern</h3>
+                    <p>SOLUTION: 服务端根据标记获取 cache 中的 model</p>
+                    <pre><code class="python" data-trim data-line-numbers="5-6">
+                        # On client
+                        def load(self, fn, *args, **kwargs):
+                            ...
+                            def replace_ref(obj):
+                                if (ref := getattr(obj, '_overmind_ref', None)):
+                                    return ref
+                                else:
+                                    return obj
+
+                            args, kwargs = walk_obj(
+                                (args, kwargs), pre=replace_ref
+                            )
+                            ...
+                    </code></pre>
+                    <aside class="notes">
+                        <ul>
+                            <li>说明 _overmind_ref 是服务端 load 完成后添加的</li>
+                        </ul>
+                    </aside>
+                </section>
+                <section data-auto-animate>
+                    <h3>支持 bitsandbytes</h3>
+                </section>
+                <section data-auto-animate>
+                    <h3>支持 bitsandbytes</h3>
+                    <ul>
+                        <li>「 只允许 load on CPU 」假设被打破</li>
+                        <li>accelerate 给到的 model 无法 pickle</li>
+                        <li>bitsandbytes 的参数不能直接被 pickle</li>
+                    </ul>
+                    <asides class="notes">
+                        <ul>
+                            <li>因为量化需要 GPU</li>
+                        </ul>
+                    </asides>
+                </section>
+                <section data-auto-animate>
+                    <h3>允许 cuda tensor 后……</h3>
+                    <ul>
+                        <li>服务端不能保留 cuda tensor</li>
+                        <li>但是在客户端需要恢复成 cuda tensor</li>
+                    </ul>
+                </section>
+                <section data-auto-animate>
+                    <h3>允许 cuda tensor 后……</h3>
+                    <pre><code class="python" data-trim data-line-numbers="7-15">
+                        def _move_torch_module_to_cpu(self, model):
+                          st = model.state_dict(keep_vars=True)
+                          dev_map = {k: v.device for k, v in st.items()}
+                          if set(dev_map.values()) == {torch.device('cpu')}:
+                            return model
+
+                          for k, v in st.items():
+                            dev = v.device
+                            v = v.to('cpu')
+                            v._prev_device = dev
+                            st[k] = v
+
+                          return reducer.RebuildTorchModuleOnClient(
+                            model, dev_map,
+                          )
+                    </code></pre>
+                </section>
+                <section data-auto-animate>
+                    <h3>允许 cuda tensor 后……</h3>
+                    <pre><code class="python" data-trim data-line-numbers="6-11">
+                        class RebuildTorchModuleOnClient:
+
+                          def __reduce__(self):
+                            return (self._rebuild, (self.model, self.dev_map))
+
+                          @staticmethod
+                          def _rebuild(model, dev_map):
+                            st = model.state_dict(keep_vars=True)
+                            st = {k: v.to(dev_map[k]) for k, v in st.items()}
+                            model.load_state_dict(st, strict=False, assign=True)
+                            return model
+                    </code></pre>
+                </section>
+                <section data-auto-animate>
+                    <h3>去除 accelerate 添的东西</h3>
+                    <pre><code class="python" data-trim data-line-numbers="3-5|7-11">
+                        def _move_torch_module_to_cpu(self, model):
+                          ...
+                          # Remove AlignDevices hooks
+                          from accelerate.hooks import remove_hook_from_module
+                          remove_hook_from_module(model, True)
+
+                          # Remove accelerate added warning hooks
+                          model.__dict__.pop('to', None)
+                          model.__dict__.pop('cuda', None)
+                          model.__dict__.pop('xpu', None)
+                          model.__dict__.pop('npu', None)
+                          ...
+                    </code></pre>
+                    <aside class="notes"><ul>
+                        <li>AlignDevices hooks 没什么用，就直接去掉了</li>
+                        <li>`to` `cuda` 之类的 method 是 monkey patch，用来报错的</li>
+                    </ul></aside>
+                </section>
+                <section data-auto-animate>
+                    <h3>特别处理下 bnb 的量化参数</h3>
+                    <pre><code class="python" data-trim data-line-numbers="4,5,11">
+                        from bitsandbytes.nn.modules import Params4bit, Int8Params
+
+                        def _reduce_bnb_param(p):
+                          dev, data = p._prev_device, p.data
+                          qs_dict = p.quant_state.as_dict(packed=True)
+                          return (_rebuild_bnb_param, (
+                            type(p), data, qs_dict, dev,
+                          ))
+
+                        def _rebuild_bnb_param(typ, data, qs_dict, dev):
+                          return typ.from_prequantized(data, qs_dict, device=dev)
+
+                        def bitsandbytes_quirks():
+                          ForkingPickler.register(Params4bit, _reduce_bnb_param)
+                          ForkingPickler.register(Int8Params, _reduce_bnb_param)
+                    </code></pre>
+                    <aside class="notes"><ul>
+                        <li>因为 model.state_dict() 不会保留 bnb 参数的类型，bnb 的参数本身也有些其他的状态</li>
+                    </ul></aside>
+                </section>
+                <section data-auto-animate>
+                    <h3>支持 stable-fast</h3>
+                </section>
+                <section data-auto-animate>
+                    <h3>支持 stable-fast</h3>
+                    <ul>
+                        <li>纯 Python 代码解决不了的性能问题</li>
+                    </ul>
+                    <asides class="notes">
+                        <ul>
+                            <li>因为量化需要 GPU</li>
+                        </ul>
+                    </asides>
+                </section>
+
+                <!---------------------------->
+                <section data-auto-animate>
+                    <h3>The `vae=vae` pattern revised</h3>
+                    <p>SOLUTION: 传递标记，server 端根据标记 unpickle</p>
+                    <pre><code class="python" data-trim data-line-numbers="5-6">
+                        # On client
+                        def load(self, fn, *args, **kwargs):
+                            ...
+                            def replace_ref(obj):
+                                if (ref := getattr(obj, '_overmind_ref', None)):
+                                    return ref
+                                else:
+                                    return obj
+
+                            args, kwargs = walk_obj(
+                                (args, kwargs), pre=replace_ref
+                            )
+                            ...
+                    </code></pre>
+                    <aside class="notes">
+                        <ul>
+                            <li>注意这个是重构后的做法</li>
+                            <li>说明 _overmind_ref 是服务端 load 完成后添加的</li>
+                            <li>提一嘴 UntypedStorage 内容是有去重的，额外的 overhead 只是一些 pickle 的数据</li>
+                        </ul>
+                    </aside>
                 </section>
 			</div>
 		</div>
@@ -254,35 +505,14 @@
 </html>
 
 <!--
-1. welcome
-2. overmind 是啥，干什么用的
-    1. 做 load 加速用
-    2. 最初是为了解决 lowpoly & refine 混合部署（快速切换模型）
-3. 如何解决了问题，效果比对
-    1. img3d cold vs hot
-4. 如何使用
-    1. monkey patch
-        3. overmind.cfg
-    2. explicitly load
-    4. memoryview
-5. 如何开始的，（torch shared mem）
-6. 核心原理
-    mermaid graph
-演进
-    1. ! cpu only
 7. 遇到的坑
-    1. diffusers dyn module
-    2. vae 的 pattern
-    3. bitsandbytes
     4. stable fast
+    2. vae 的 pattern
     others (eng
         2. pickle quirks
         2. socket path
         1. feature gate (thx to ksf)
-8. 大重构
-    1. drop torch shared mem
-        1. can cache pickle result
-        2. reduce fd usage
-        3. does not require shmem
 9. thank you
+
+rpyc sucks
 -->
