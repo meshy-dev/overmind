@@ -18,7 +18,7 @@
                 text-transform: none !important;
             }
             .reveal pre code {
-                max-height: 500px;
+                max-height: 600px;
             }
         </style>
 	</head>
@@ -36,9 +36,7 @@
                     <pre><code class="bash" data-trim data-line-numbers="1-6|8-13">
                         python -m meshflow.main_mvdream \
                             --config image3d/coarse.instantngp.yaml \
-                            seed=1234 \
-                            input=~/gun.jpg \
-                            art_style=realistic
+                            seed=1234 input=~/gun.jpg art_style=realistic
                     </code></pre>
                     <div class="mermaid">
                         <pre>
@@ -50,6 +48,9 @@
                             bar [123.48, 137.8, 109.0]
                         </pre>
                     </div>
+                    <aside class="notes"><ul>
+                        <li>Cold 的 overhead 是 dill 引起的</li>
+                    </ul></aside>
                 </section>
                 <!--
                 <section>
@@ -260,6 +261,7 @@
                             <li>最初就是因为发现了 torch 的 shared memory 机制，才有了 overmind 的想法 </li>
                             <li>后面扩展到了 Windows，因为发现这玩意对 Researchers 的价值更大</li>
                             <li>低侵入性基本做到了， guidance.imagedream_utils.model_zoo::build_model 和 TensorRT 的地方还是需要显式 load，后面被 overmind.cfg 解决</li>
+                            <li>解释下与之前说的 UntypedStorage 是不同的方案</li>
                         </ul>
                     </aside>
                 </section>
@@ -270,9 +272,9 @@
                         <li>并不在 sys.path 里，所以客户端 unpickle 的时候会找不到这个 module</li>
                         <li>还好 diffusers 把他们按照 module 的结构写到了文件系统上！</li>
                     </ul>
-                    <aside class="notes">
-                        解释下接下来内容都是按照实际的时间线来的
-                    </aside>
+                    <aside class="notes"><ul>
+                        <li>解释下接下来内容都是按照实际的时间线来的</li>
+                    </ul></aside>
                 </section>
                 <section data-auto-animate>
                     <h3>diffusers 有个动态的 module？</h3>
@@ -345,11 +347,11 @@
                         <li>accelerate 给到的 model 无法 pickle</li>
                         <li>bitsandbytes 的参数不能直接被 pickle</li>
                     </ul>
-                    <asides class="notes">
+                    <aside class="notes">
                         <ul>
                             <li>因为量化需要 GPU</li>
                         </ul>
-                    </asides>
+                    </aside>
                 </section>
                 <section data-auto-animate>
                     <h3>允许 cuda tensor 后……</h3>
@@ -509,39 +511,113 @@
                     </ul></aside>
                 </section>
                 <section data-auto-animate>
-                    <h3>去除 accelerate 添的东西</h3>
-                    <pre><code class="python" data-trim data-line-numbers="3-5|7-11">
+                    <h3>又多了些 pickle 处理不了的东西</h3>
+                    <pre><code class="python" data-trim data-line-numbers="">
+                        # Assuming data in thread local is not important,
+                        # just drop them
+                        from _thread import _local
+                        ForkingPickler.register(_local, lambda _: (_local, ()))
                     </code></pre>
                     <aside class="notes"><ul>
                         <li></li>
                     </ul></aside>
                 </section>
-
                 <section data-auto-animate>
-                    <h3>The `vae=vae` pattern revised</h3>
-                    <p>SOLUTION: 传递标记，server 端根据标记 unpickle</p>
-                    <pre><code class="python" data-trim data-line-numbers="5-6">
-                        # On client
-                        def load(self, fn, *args, **kwargs):
-                            ...
-                            def replace_ref(obj):
-                                if (ref := getattr(obj, '_overmind_ref', None)):
-                                    return ref
-                                else:
-                                    return obj
+                    <h3>又多了些 pickle 处理不了的东西</h3>
+                    <pre><code class="python" data-trim data-line-numbers="">
+                        def _reduce(obj):
+                          zipped = io.BytesIO()
+                          torch.jit.save(obj, zipped)
+                          inflated = convert_to_stored_zip(zipped)
+                          return (_rebuild, (memoryview(inflated),))
 
-                            args, kwargs = walk_obj(
-                                (args, kwargs), pre=replace_ref
-                            )
-                            ...
+                        def _rebuild(payload: memoryview):
+                          cu = torch._C.CompilationUnit()
+                          m = overmind._C.import_ir_module_from_buffer_0copy(
+                            cu, payload,
+                          )
+                          return torch.jit._recursive.wrap_cpp_module(m)
+
+                        def pytorch_jit_pickle_quirks():
+                          register(torch.jit.RecursiveScriptModule, _reduce)
+                          register(torch.jit.ScriptModule, _reduce)
+                          register(torch.jit.ScriptFunction, _reduce)
                     </code></pre>
-                    <aside class="notes">
-                        <ul>
-                            <li>注意这个是重构后的做法</li>
-                            <li>说明 _overmind_ref 是服务端 load 完成后添加的</li>
-                            <li>提一嘴 UntypedStorage 内容是有去重的，额外的 overhead 只是一些 pickle 的数据</li>
-                        </ul>
-                    </aside>
+                    <aside class="notes"><ul>
+                        <li></li>
+                    </ul></aside>
+                </section>
+                <section data-auto-animate>
+                    <h3>又多了些 pickle 处理不了的东西</h3>
+                    <pre><code class="python" data-trim data-line-numbers="">
+                        # pickle dataclass type instead of just put it into a
+                        # container, which will not survive after torch.jit.save
+                        from sfast.utils import flat_tensors
+                        from sfast.utils.flat_tensors import \
+                          flatten_bytes, flatten_dict, \
+                          unflatten_bytes, unflatten_dict
+
+                        def flatten_dataclass(obj):
+                          d = dict((field.name, getattr(obj, field.name))
+                                    for field in dataclasses.fields(obj))
+                          pickled = pickle.dumps(obj.__class__)
+                          return flatten_bytes(pickled) + flatten_dict(d)
+
+                        def unflatten_dataclass(tensors, start):
+                          pickled, start = unflatten_bytes(tensors, start)
+                          clz = pickle.loads(pickled)
+                          content, start = unflatten_dict(tensors, start)
+                          return clz(**content), start
+
+                        flat_tensors.flatten_dataclass = flatten_dataclass
+                        flat_tensors.unflatten_dataclass = unflatten_dataclass
+                    </code></pre>
+                    <aside class="notes"><ul>
+                        <li>这个 flatten 和 unflatten 是 stable-fast 的 forward 阶段用的，可以把任意的 object 变成一个 tensor 再变回来。为了可以被 trace。</li>
+                    </ul></aside>
+                </section>
+                <section data-auto-animate>
+                    <h3>既然 C++ 无法避免……</h3>
+                    <p>来点 zero copy 的 torch.UntypedStorage !</p>
+                    <pre><code class="cpp" data-trim data-line-numbers="2,4,7,9">
+                        m.def("_make_untyped_storage", [](py::buffer b) {
+                          auto info = new py::buffer_info(b.request());
+
+                          return reinterpret_steal&lt;py::object&gt;(THPStorage_New(
+                            c10::make_intrusive&lt;at::StorageImpl&gt;(
+                              c10::StorageImpl::use_byte_size_t(),
+                              info-&gt;size,
+                              at::DataPtr(
+                                info-&gt;ptr,
+                                info,
+                                [](void* ptr) {
+                                  py::gil_scoped_acquire gil;
+                                  auto b = static_cast&lt;py::buffer_info*&gt;(ptr);
+                                  delete b;
+                                }, at::DeviceType::CPU
+                              ), /*allocator=*/nullptr, /*resizable=*/false)
+                            )
+                          );
+                        });
+                    </code></pre>
+                    <aside class="notes"><ul>
+                        <li>Python code 前面讲过</li>
+                        <li>之前的 RebuildTorchModuleOnClient 就废弃了</li>
+                    </ul></aside>
+                </section>
+                <section data-auto-animate>
+                    <h3>新的 tensor sharing 机制完成后</h3>
+                    <ul>
+                        <li>pickle 结果可以复用！</li>
+                        <li>所以 pickle 结果也可以放到共享内存里！</li>
+                        <li><span class="fragment highlight-red">2.5M -> 152 bytes per request over TCP</span></li>
+                        <li class="fragment">之前的 RebuildTorchModuleOnClient 机制就废弃了</li>
+                    </ul>
+                    <aside class="notes"><ul>
+                    </ul></aside>
+                </section>
+                <section>
+                    <h1>Thank you!</h1>
                 </section>
 			</div>
 		</div>
@@ -569,8 +645,6 @@
 
 <!--
 7. 遇到的坑
-    4. stable fast
-    2. vae 的 pattern
     others (eng
         2. pickle quirks
         2. socket path
