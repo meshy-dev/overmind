@@ -25,7 +25,7 @@ jobs:
         run: |
           set -x
           pip install --upgrade pip
-          pip install -U pdm twine torch==2.1.2 setuptools
+          pip install -U 'pdm<2.16.0' twine torch==2.1.2 setuptools
           pdm build -vv
       - name: Release to PyPI
         if: ${{ github.event_name == 'release' }}
@@ -51,7 +51,7 @@ jobs:
         run: |
           $env:PATH="$env:APPDATA\Python\Library\Bin;$env:PATH"
           pip install --upgrade pip
-          pip install -U pdm twine torch==2.1.2 setuptools
+          pip install -U 'pdm<2.16.0' twine torch==2.1.2 setuptools
           pdm build -vv
       - name: Release to PyPI
         if: ${{ github.event_name == 'release' }}
