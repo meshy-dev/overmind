@@ -4,8 +4,8 @@
 [metadata]
 groups = ["default"]
 strategy = ["cross_platform", "inherit_metadata"]
-lock_version = "4.4.1"
-content_hash = "sha256:bddc434838e8aaa4305a900442ba1a232443ed47e5c311ee13a3b60e9257533c"
+lock_version = "4.4.2"
+content_hash = "sha256:10184a2ea3e56c56fcbd430ab5b7c21174bfc2d0b4c9cd3bdadb52dafadea78c"
 
 [[package]]
 name = "daemonize"
