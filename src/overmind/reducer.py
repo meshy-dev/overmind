@@ -30,16 +30,22 @@ class OvermindRef:
 
 
 class OvermindPickler(dill.Pickler):
+    _my_extra_reducers = {}
 
     def __init__(self, file):
         super().__init__(file)
         self.dispatch_table = ForkingPickler(file).dispatch_table
+        self.dispatch_table.update(self._my_extra_reducers)
 
     @classmethod
     def dumps(cls, obj):
         buf = io.BytesIO()
         cls(buf).dump(obj)
         return buf.getbuffer()
+
+    @classmethod
+    def register(cls, type, reduce):
+        cls._my_extra_reducers[type] = reduce
 
 
 def _rebuild_memoryview_on_client(v: Fragment):
@@ -156,7 +162,7 @@ def pytorch_pickle_quirks(*, server: bool):
     import torch.multiprocessing.reductions
 
     def register_server(cls, fn):
-        ForkingPickler.register(cls, fn)
+        OvermindPickler.register(cls, fn)
 
     def forbid_reducing(obj):
         raise RuntimeError(
@@ -166,7 +172,7 @@ def pytorch_pickle_quirks(*, server: bool):
         )
 
     def register_client(cls, _fn):
-        ForkingPickler.register(cls, forbid_reducing)
+        OvermindPickler.register(cls, forbid_reducing)
 
     if server:
         register = register_server
@@ -221,18 +227,18 @@ def stable_fast_quirks():
 
 def thread_quirks():
     # Assuming data in thread local is not important, just drop them
-    ForkingPickler.register(_local, lambda _: (_local, ()))
+    OvermindPickler.register(_local, lambda _: (_local, ()))
 
 
 def init_reductions_client():
-    ForkingPickler.register(memoryview, _reduce_memoryview_on_client)
+    OvermindPickler.register(memoryview, _reduce_memoryview_on_client)
     thread_quirks()
     pytorch_pickle_quirks(server=False)
     stable_fast_quirks()
 
 
 def init_reductions_server():
-    ForkingPickler.register(memoryview, _reduce_memoryview_on_server)
+    OvermindPickler.register(memoryview, _reduce_memoryview_on_server)
     thread_quirks()
     pytorch_pickle_quirks(server=True)
     stable_fast_quirks()
