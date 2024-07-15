@@ -3,7 +3,6 @@
 # -- stdlib --
 from functools import lru_cache
 from multiprocessing.connection import Client
-from multiprocessing.reduction import ForkingPickler as Pickler
 from pathlib import Path
 from typing import Any
 import importlib
@@ -146,6 +145,8 @@ class OvermindClient:
         return ret
 
     def load(self, fn, *args, **kwargs):
+        from .reducer import OvermindUnpicker as Unpickler
+
         if os.environ.get('OVERMIND_DISABLE'):
             log.warning('overmind disabled by OVERMIND_DISABLE env variable, loading model directly')
             return self._local_cached_load(fn, args, kwargs)
@@ -169,7 +170,7 @@ class OvermindClient:
         b4 = time.time()
         b: bytes = self._call('load', fn, args, kwargs)
         rpc_time = time.time() - b4
-        obj = Pickler.loads(Pickler.loads(b))
+        obj = Unpickler.loads(Unpickler.loads(b))
         log.info(f'Loaded {disp} in {time.time() - b4:.3f}s (rpc: {rpc_time:.3f}s)')
         return obj
 
