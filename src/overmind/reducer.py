@@ -48,6 +48,12 @@ class OvermindPickler(dill.Pickler):
         cls._my_extra_reducers[type] = reduce
 
 
+class OvermindUnpicker(ForkingPickler):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.dispatch_table.update(OvermindPickler._my_extra_reducers)
+
+
 def _rebuild_memoryview_on_client(v: Fragment):
     from .shmem import borrower
     return borrower.borrow(v)
@@ -231,14 +237,14 @@ def thread_quirks():
 
 
 def init_reductions_client():
-    OvermindPickler.register(memoryview, _reduce_memoryview_on_client)
+    ForkingPickler.register(memoryview, _reduce_memoryview_on_client)  # Not OvermindPickler, it's not a typo
     thread_quirks()
     pytorch_pickle_quirks(server=False)
     stable_fast_quirks()
 
 
 def init_reductions_server():
-    OvermindPickler.register(memoryview, _reduce_memoryview_on_server)
+    ForkingPickler.register(memoryview, _reduce_memoryview_on_server)  # Not OvermindPickler, it's not a typo
     thread_quirks()
     pytorch_pickle_quirks(server=True)
     stable_fast_quirks()
