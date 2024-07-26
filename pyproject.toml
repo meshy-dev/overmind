@@ -7,7 +7,7 @@ authors = [
 ]
 dependencies = [
     "daemonize>=2.5.0",
-    "torch>=2.1.2",
+    "torch>=2.3.0",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
@@ -20,7 +20,7 @@ overmind-shutdown= "overmind.cli:shutdown"
 overmind-drop-shell= "overmind.cli:drop_shell"
 
 [build-system]
-requires = ["pdm-backend", "torch==2.1.2", "setuptools<70.0.0", "numpy"]
+requires = ["pdm-backend", "torch==2.3.0", "setuptools<70.0.0", "numpy"]
 build-backend = "pdm.backend"
 
 [tool.pdm]
