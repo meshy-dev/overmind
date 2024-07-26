@@ -145,7 +145,9 @@ void initOvermindHelpers(py::module m) {
         auto size = info->size;
         auto ptr = info->ptr;
 
-        return pybind11::reinterpret_steal<py::object>(THPStorage_New(
+
+        return pybind11::reinterpret_steal<py::object>(THPStorage_NewWithStorage(
+            THPStorageClass,
             c10::make_intrusive<at::StorageImpl>(
                 c10::StorageImpl::use_byte_size_t(),
                 size,
@@ -160,7 +162,8 @@ void initOvermindHelpers(py::module m) {
                     at::DeviceType::CPU
                 ),
                 /*allocator=*/nullptr,
-                /*resizable=*/false)
+                /*resizable=*/false),
+	    c10::impl::PyInterpreterStatus::DEFINITELY_UNINITIALIZED
             )
         );
     });
