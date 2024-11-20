@@ -137,6 +137,9 @@ class OvermindService:
                 self._models[reuse_key] = self._models[key]
             else:
                 # Slave
+                import ctypes
+                ctypes.CDLL(None).prctl(15, 1)  # PR_SET_PDEATHSIG, 1
+
                 from .shmem import filler
                 filler.init_on_slave(slave)
                 fn, args, kwargs = self._pre_transform((fn, args, kwargs))
