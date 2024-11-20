@@ -36,6 +36,7 @@ SharedMemoryId = Tuple[int, int] | str  # (pid, fd) for (unix), str for shmem na
 
 
 class SharedMemory:
+    _pid = None
     _name = None
     _fd = -1
     _mmap = None
@@ -59,7 +60,7 @@ class SharedMemory:
         name = _make_filename(shift).encode('utf-8')
         fd = libc.memfd_create(name, os.O_RDWR)
         os.ftruncate(fd, 1 << shift)
-        return cls(fd=fd, name=name, cookie=cls._COOKIE)
+        return cls(fd=fd, name=name, pid=os.getpid(), cookie=cls._COOKIE)
 
     @classmethod
     def _create_win32(cls, shift):
@@ -79,7 +80,7 @@ class SharedMemory:
         finally:
             _winapi.CloseHandle(h_map)
 
-    def __init__(self, fd=None, name=None, cookie=None):
+    def __init__(self, fd=None, name=None, pid=None, cookie=None):
         if cookie is not self._COOKIE:
             raise Exception('Use SharedMemory.create!')
 
@@ -87,6 +88,7 @@ class SharedMemory:
             assert fd
             self._name = name or 'memfd:overmind-shmem'
             self._fd = fd
+            self._pid = pid
             stats = os.fstat(self._fd)
             size = stats.st_size
             self._mmap = mmap.mmap(self._fd, size)
@@ -116,7 +118,7 @@ class SharedMemory:
     @property
     def mem_id(self):
         if os.name == 'posix':
-            return os.getpid(), self._fd
+            return self._pid, self._fd
         else:
             return self._name
 
@@ -126,7 +128,7 @@ class SharedMemory:
             assert isinstance(mem_id, tuple)
             pid, fd = mem_id
             fd = os.open(f'/proc/{pid}/fd/{fd}', os.O_RDWR)
-            return cls(fd=fd, cookie=cls._COOKIE)
+            return cls(fd=fd, pid=pid, cookie=cls._COOKIE)
         else:
             assert isinstance(mem_id, str)
             return cls(name=mem_id, cookie=cls._COOKIE)
@@ -171,7 +173,7 @@ class Hoarder:
         with self.lock:
             self.shift += 1
             log.debug('Hoarder: Creating new arena with shift = %s', self.shift)
-            tag = random.getrandbits(24)
+            tag = random.getrandbits(48)
             arena = Arena(
                 tag=tag,
                 mem=SharedMemory.create(self.shift),
@@ -225,7 +227,12 @@ class Filler:
     def commit(self):
         assert self.initialized
         with self.lock:
-            self.conn.send(('merge', ([arena.tag, arena.current] for arena in self.arenas.values()), self.new_fragments))
+            self.conn.send((
+                'merge',
+                ([[arena.tag, arena.current] for arena in self.arenas.values()], self.new_fragments),
+                {},
+            ))
+            self.conn.recv()
             self.new_fragments.clear()
 
     def put(self, data: 'bytes | memoryview | UntypedStorage', align=16):
