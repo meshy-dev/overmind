@@ -248,6 +248,18 @@ void initOvermindHelpers(py::module m) {
             }
             std::memcpy(dst_info.ptr, src_ptr, src_size);
         });
+    m.def(
+        "_zero_buffer",
+        [](py::buffer dst) {
+            py::buffer_info dst_info = dst.request();
+
+            if (dst_info.itemsize != 1) throw py::type_error("Buffer item size must be 1");
+            if (dst_info.ndim != 1) throw py::type_error("Buffer must be 1-dimensional");
+            if (dst_info.format != "B") throw py::type_error("Buffer format must be 'B'");
+            if (dst_info.readonly) throw py::value_error("Destination buffer is read-only");
+
+            std::memset(dst_info.ptr, 0, dst_info.size);
+        });
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

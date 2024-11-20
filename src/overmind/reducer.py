@@ -64,8 +64,8 @@ def _reduce_memoryview_on_client(v: memoryview):
 
 
 def _reduce_memoryview_on_server(v: memoryview):
-    from .shmem import hoarder
-    frag = hoarder.put(v)
+    from .shmem import filler
+    frag = filler.put(v)
     return (_rebuild_memoryview_on_client, (frag,))
 
 
@@ -112,7 +112,7 @@ def _reduce_storage(storage):
     # Copied from torch.multiprocessing.reductions, with modifications
 
     from torch.multiprocessing.reductions import rebuild_storage_empty
-    from .shmem import hoarder
+    from .shmem import filler
 
     if storage.size() == 0:
         # This is special cased because Empty tensors
@@ -121,7 +121,7 @@ def _reduce_storage(storage):
     else:
         device = storage.device
         storage = storage.cpu()
-        frag = hoarder.put(storage)
+        frag = filler.put(storage)
         return (_rebuild_storage_on_client, (frag, device))
 
 

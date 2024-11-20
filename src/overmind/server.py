@@ -3,6 +3,7 @@
 # -- stdlib --
 from multiprocessing.connection import Connection, Listener
 from multiprocessing.pool import ThreadPool
+from typing import Any
 from pathlib import Path
 import argparse
 import base64
@@ -179,28 +180,20 @@ class OvermindService:
         IPython.embed()
 
 
-class ThreadedServer:
+class BaseServer:
 
-    def __init__(self, service):
+    def __init__(self, service: Any):
         self.service = service
-        self.pool = ThreadPool(16)
 
-    def run(self):
-        omenv = OvermindEnv.get()
-        listener = Listener(omenv.comm_endpoint, authkey=omenv.venv_hash.encode('utf-8'))
-        log.info('Overmind server started at %s', omenv.comm_endpoint.replace("\x00", "@"))
-        while True:
-            client = listener.accept()
-            self.pool.apply_async(self._serve, [client])
-
-    def _serve(self, client: Connection):
+    @staticmethod
+    def serve_one(service: Any, client: Connection):
         try:
             while True:
                 req = client.recv()
                 fn = '<unknown>'
                 try:
                     fn, args, kwargs = req
-                    f = getattr(self.service, f'exposed_{fn}')
+                    f = getattr(service, f'exposed_{fn}')
                     ret = f(*args, **kwargs)
                 except Exception as e:
                     log.exception(f'Error calling {fn}')
@@ -213,11 +206,39 @@ class ThreadedServer:
             pass
 
 
+class OneShotServer(BaseServer):
+
+    def __init__(self, service: Any, client: Connection):
+        super().__init__(service)
+        self.client = client
+
+    def run(self):
+        self.serve_one(self.service, self.client)
+
+
+class ThreadedServer(BaseServer):
+
+    def __init__(self, service: Any, listener: Listener):
+        super().__init__(service)
+        self.listener = listener
+
+    def run(self):
+        self.pool = ThreadPool(16)
+        while True:
+            client = self.listener.accept()
+            self.pool.apply_async(self.serve_one, [self.service, client])
+
+
+
 def main():
     import overmind.reducer
     overmind.reducer.init_reductions_server()
 
-    server = ThreadedServer(OvermindService())
+    omenv = OvermindEnv.get()
+    listener = Listener(omenv.comm_endpoint, authkey=omenv.venv_hash.encode('utf-8'))
+    log.info('Overmind server started at %s', omenv.comm_endpoint.replace("\x00", "@"))
+
+    server = ThreadedServer(OvermindService(), listener)
     server.run()
 
 
