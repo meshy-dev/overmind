@@ -6,6 +6,7 @@ from typing import List, TYPE_CHECKING, Tuple, Dict
 import base64
 import logging
 import multiprocessing
+import multiprocessing.connection
 import ctypes
 import mmap
 import os
@@ -196,22 +197,24 @@ class Filler:
     # Runs on forked slave
 
     def __init__(self):
-        self.synchronized = False
+        self.initialized = False
         self.arenas: Dict[int, Arena] = {}
         self.fragments: Dict[int, Fragment] = {}
         self.new_fragments: Dict[int, Fragment] = {}
         self.lock = threading.RLock()
 
-    def synchronize(self):
-        assert not self.synchronized
-        self.synchronized = True
+    def init_on_slave(self, conn: multiprocessing.connection.Connection):
+        assert not self.initialized
+        self.initialized = True
         self.arenas = hoarder.arenas
         self.fragments = hoarder.fragments
-        hoarder.master_conn.close()
+
+        # conn is a Hoarder service
+        self.conn = conn
 
     def request_arena(self):
-        hoarder.slave_conn.send(('allocate', (), {}))
-        arena = hoarder.slave_conn.recv()
+        self.conn.send(('allocate', (), {}))
+        arena = self.conn.recv()
         log.debug('Filler: got new arena %s', arena)
         self.arenas[arena.tag] = Arena(
             tag=arena.tag,
@@ -220,13 +223,13 @@ class Filler:
         )
 
     def commit(self):
-        assert self.synchronized
+        assert self.initialized
         with self.lock:
-            hoarder.slave_conn.send(('merge', ([arena.tag, arena.current] for arena in self.arenas.values()), self.new_fragments))
+            self.conn.send(('merge', ([arena.tag, arena.current] for arena in self.arenas.values()), self.new_fragments))
             self.new_fragments.clear()
 
     def put(self, data: 'bytes | memoryview | UntypedStorage', align=16):
-        assert self.synchronized
+        assert self.initialized
         import overmind._C
         from torch import UntypedStorage
 
@@ -241,7 +244,7 @@ class Filler:
         with self.lock:
             size = len(data)
 
-            for tag, arena in self.arenas.items():
+            for _tag, arena in self.arenas.items():
                 current = (arena.current + align - 1) & ~(align - 1)
 
                 if current + size > len(arena.mem.view):
