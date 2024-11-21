@@ -33,8 +33,8 @@ log = logging.getLogger('overmind.server')
 class _ResultService:
 
     def __init__(self):
-        self.result = None
-        self.exception = None
+        self.result: Any = None
+        self.exception: Any = None
 
     def exposed_set_result(self, result):
         self.result = result
@@ -122,80 +122,83 @@ class OvermindService:
                 return self._models[key]
 
             log.info('Cold load model %s', disp)
-            reuse_key = base64.b32encode(random.randbytes(5)).decode('utf-8')
-            b4 = time.time()
 
-            master, slave = multiprocessing.Pipe()
+            master_end, slave_end = multiprocessing.Pipe()
             if pid := os.fork():
                 # Master
                 try:
-                    slave.close()
+                    slave_end.close()
                     from .shmem import hoarder
                     rsvc = _ResultService()
                     # hoarder is needed by filler on slave
-                    OneShotServer([hoarder, rsvc], master).run()
+                    OneShotServer([hoarder, rsvc], master_end).run()
 
                     if rsvc.exception:
                         return rsvc.exception
 
-                    rst = rsvc.result
-                    if rst is None:
-                        log.error('Model %s failed to load!', disp)
-                        raise ValueError('Model failed to load')
+                    if rsvc.result is None:
+                        raise ValueError(f'Model {disp} failed to load')
 
-                    self._models[key] = rst
-                    self._models[reuse_key] = rst
+                    model, reuse_key = rsvc.result
+                    self._models[key] = model
+                    self._models[reuse_key] = model
                 finally:
                     os.kill(pid, 9)
                     os.waitpid(pid, 0)
             else:
                 # Slave
                 try:
-                    master.close()
+                    master_end.close()
 
                     log.info('Forked worker pid = %s', os.getpid())
-
-                    from .shmem import SharedMemory
-                    SharedMemory.create = lambda *__, **_: 1/0
 
                     import ctypes
                     ctypes.CDLL(None).prctl(1, 9)
 
                     from .shmem import filler
-                    filler.init_on_slave(slave)
-                    fn, args, kwargs = self._pre_transform((fn, args, kwargs))
-                    model = fn(*args, **kwargs)
-                    model = self._post_transform(model)
-                    try:
-                        model.__dict__['_overmind_ref'] = OvermindRef(key=reuse_key, disp=disp)
-                    except AttributeError:
-                        pass
+                    filler.init_on_slave(slave_end)
 
-                    log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
-
-                    b4 = time.time()
-                    model = OvermindPickler.dumps(OvermindPickler.dumps(model))  # Double pickle, saving pickle to shared mem too!
-                    model = bytes(model)
-                    log.info('Pickled in %.3fs, size = %s bytes', time.time() - b4, len(model))
+                    model, reuse_key = self._load_model(fn, args, kwargs)
 
                     filler.commit()
-                    slave.send(('set_result', (model,), {}))
-                    slave.recv()
+                    slave_end.send(('set_result', ((model, reuse_key),), {}))
+                    slave_end.recv()
                 except Exception as e:
                     log.exception('Error loading model %s', disp)
                     text = traceback.format_exc()
                     try:
-                        slave.send(('set_exception', (ServiceExceptionInfo(type=type(e), desc=str(e), traceback=text),), {}))
-                        slave.recv()
+                        slave_end.send(('set_exception', (ServiceExceptionInfo(type=type(e), desc=str(e), traceback=text),), {}))
+                        slave_end.recv()
                     except:
                         pass
                 finally:
-                    slave.close()
+                    slave_end.close()
                     os._exit(0)
 
             self._models_disp.append(disp)
 
             return self._models[key]
+
+    def _load_model(self, fn, args, kwargs):
+        disp = display_of(fn, args, kwargs)
+        reuse_key = base64.b32encode(random.randbytes(5)).decode('utf-8')
+        b4 = time.time()
+
+        fn, args, kwargs = self._pre_transform((fn, args, kwargs))
+        model = fn(*args, **kwargs)
+        model = self._post_transform(model)
+        try:
+            model.__dict__['_overmind_ref'] = OvermindRef(key=reuse_key, disp=disp)
+        except AttributeError:
+            pass
+
+        log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
+
+        b4 = time.time()
+        model = OvermindPickler.dumps(OvermindPickler.dumps(model))  # Double pickle, saving pickle to shared mem too!
+        model = bytes(model)
+        log.info('Pickled in %.3fs, size = %s bytes', time.time() - b4, len(model))
+        return model, reuse_key
 
     def _pre_transform(self, model):
         from multiprocessing.reduction import ForkingPickler as Pickler

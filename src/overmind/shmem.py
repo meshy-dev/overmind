@@ -164,11 +164,10 @@ class Arena:
 class Hoarder:
 
     def __init__(self):
-        self.shift = 34
+        self.shift = 33
         self.arenas: Dict[int, Arena] = {}
         self.fragments: Dict[int, Fragment] = {}
         self.lock = threading.RLock()
-        self.master_conn, self.slave_conn = multiprocessing.Pipe()
 
     def exposed_allocate(self) -> ExportedArena | None:
         with self.lock:
@@ -228,11 +227,8 @@ class Filler:
     def commit(self):
         assert self.initialized
         with self.lock:
-            self.conn.send((
-                'merge',
-                ([[arena.tag, arena.current] for arena in self.arenas.values()], self.new_fragments),
-                {},
-            ))
+            args = ([[arena.tag, arena.current] for arena in self.arenas.values()], self.new_fragments)
+            self.conn.send(('merge', args, {}))
             self.conn.recv()
             self.new_fragments.clear()
 
@@ -267,7 +263,6 @@ class Filler:
                 else:
                     memory[:] = data
                 frag = Fragment(arena=arena.mem.mem_id, offset=current, size=size)
-                log.debug('Filler: put new fragment %s', frag)
                 self.fragments[digest] = frag
                 self.new_fragments[digest] = frag
                 return frag
