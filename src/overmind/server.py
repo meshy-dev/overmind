@@ -150,6 +150,10 @@ class OvermindService:
                 try:
                     master_end.close()
 
+                    from .common import SERVER_INSTANCE
+                    assert SERVER_INSTANCE is not None
+                    SERVER_INSTANCE.stop()
+
                     log.info('Forked worker pid = %s', os.getpid())
 
                     import ctypes
@@ -287,6 +291,9 @@ class OneShotServer(BaseServer):
     def run(self):
         self.serve_one(self.services, self.client)
 
+    def stop(self):
+        pass
+
 
 class ThreadedServer(BaseServer):
 
@@ -306,6 +313,9 @@ class ThreadedServer(BaseServer):
 
         self.pool.join()
 
+    def stop(self):
+        self.listener.close()
+
 
 class NaiveServer(BaseServer):
 
@@ -322,17 +332,23 @@ class NaiveServer(BaseServer):
 
             self.serve_one(self.services, client)
 
+    def stop(self):
+        self.listener.close()
+
 
 
 def main():
     import overmind.reducer
+    from . import common
     overmind.reducer.init_reductions_server()
 
     omenv = OvermindEnv.get()
     listener = Listener(omenv.comm_endpoint, authkey=omenv.venv_hash.encode('utf-8'))
     log.info('Overmind server started at %s, pid = %s', omenv.comm_endpoint.replace("\x00", "@"), os.getpid())
 
-    server = NaiveServer([OvermindService()], listener)
+    server = ThreadedServer([OvermindService()], listener)
+    assert common.SERVER_INSTANCE is None
+    common.SERVER_INSTANCE = server
     server.run()
 
 
