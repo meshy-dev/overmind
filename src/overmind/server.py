@@ -3,16 +3,13 @@
 # -- stdlib --
 from multiprocessing.connection import Connection, Listener
 from multiprocessing.pool import ThreadPool
-import os
-from typing import Any
 from pathlib import Path
-import multiprocessing
+from typing import Any, List
 import argparse
 import base64
 import importlib
 import logging
-import os
-from typing import List
+import multiprocessing
 import random
 import sys
 import threading
@@ -20,6 +17,8 @@ import time
 import traceback
 
 # -- third party --
+import os
+
 # -- own --
 from .common import OvermindEnv, ServiceExceptionInfo, display_of, key_of
 from .reducer import OvermindPickler, OvermindRef

@@ -2,18 +2,19 @@
 
 # -- stdlib --
 from dataclasses import dataclass
-from typing import List, TYPE_CHECKING, Tuple, Dict
+from typing import Dict, List, TYPE_CHECKING, Tuple
 import base64
+import ctypes
 import logging
+import mmap
 import multiprocessing
 import multiprocessing.connection
-import ctypes
-import mmap
-import os
 import random
 import threading
 
 # -- third party --
+import os
+
 # -- own --
 from .common import OvermindEnv
 
