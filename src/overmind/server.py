@@ -153,8 +153,10 @@ class OvermindService:
                 try:
                     master.close()
 
+                    log.info('Forked worker pid = %s', os.getpid())
+
                     from .shmem import SharedMemory
-                    SharedMemory.create = lambda *args, **kwargs: 1/0
+                    SharedMemory.create = lambda *__, **_: 1/0
 
                     import ctypes
                     ctypes.CDLL(None).prctl(1, 9)
@@ -325,7 +327,7 @@ def main():
 
     omenv = OvermindEnv.get()
     listener = Listener(omenv.comm_endpoint, authkey=omenv.venv_hash.encode('utf-8'))
-    log.info('Overmind server started at %s', omenv.comm_endpoint.replace("\x00", "@"))
+    log.info('Overmind server started at %s, pid = %s', omenv.comm_endpoint.replace("\x00", "@"), os.getpid())
 
     server = NaiveServer([OvermindService()], listener)
     server.run()

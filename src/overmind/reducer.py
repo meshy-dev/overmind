@@ -103,7 +103,7 @@ def _rebuild_storage_on_client(frag, device):
     if device.type == 'cpu':
         return storage
     elif device.type == 'cuda':
-        return storage.cuda(device)
+        return storage.cuda(device.index)
     else:
         raise ValueError(f'Unexpected device {repr(device)}')
 
