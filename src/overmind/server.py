@@ -4,12 +4,12 @@
 from multiprocessing.connection import Connection, Listener
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
+from typing import Any, List
 import argparse
 import base64
-import gc
 import importlib
 import logging
-import os
+import multiprocessing
 import random
 import sys
 import threading
@@ -17,6 +17,8 @@ import time
 import traceback
 
 # -- third party --
+import os
+
 # -- own --
 from .common import OvermindEnv, ServiceExceptionInfo, display_of, key_of
 from .reducer import OvermindPickler, OvermindRef
@@ -25,6 +27,19 @@ from .utils.misc import walk_obj
 
 # -- code --
 log = logging.getLogger('overmind.server')
+
+
+class _ResultService:
+
+    def __init__(self):
+        self.result: Any = None
+        self.exception: Any = None
+
+    def exposed_set_result(self, result):
+        self.result = result
+
+    def exposed_set_exception(self, exception):
+        self.exception = exception
 
 
 class OvermindService:
@@ -106,31 +121,87 @@ class OvermindService:
                 return self._models[key]
 
             log.info('Cold load model %s', disp)
-            b4 = time.time()
-            fn, args, kwargs = self._pre_transform((fn, args, kwargs))
-            model = fn(*args, **kwargs)
-            model = self._post_transform(model)
-            reuse_key = base64.b32encode(random.randbytes(5)).decode('utf-8')
-            try:
-                model.__dict__['_overmind_ref'] = OvermindRef(key=reuse_key, disp=disp)
-            except AttributeError:
-                pass
 
-            log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
+            master_end, slave_end = multiprocessing.Pipe()
+            if pid := os.fork():
+                # Master
+                try:
+                    slave_end.close()
+                    from .shmem import hoarder
+                    rsvc = _ResultService()
+                    # hoarder is needed by filler on slave
+                    OneShotServer([hoarder, rsvc], master_end).run()
 
-            b4 = time.time()
-            self._models[key] = OvermindPickler.dumps(OvermindPickler.dumps(model))  # Double pickle, saving pickle to shared mem too!
-            self._models[reuse_key] = self._models[key]
-            log.info('Pickled in %.3fs, size = %s bytes', time.time() - b4, len(self._models[key]))
+                    if rsvc.exception:
+                        return rsvc.exception
+
+                    if rsvc.result is None:
+                        raise ValueError(f'Model {disp} failed to load')
+
+                    model, reuse_key = rsvc.result
+                    self._models[key] = model
+                    self._models[reuse_key] = model
+                finally:
+                    os.kill(pid, 9)
+                    os.waitpid(pid, 0)
+            else:
+                # Slave
+                try:
+                    master_end.close()
+
+                    from .common import SERVER_INSTANCE
+                    assert SERVER_INSTANCE is not None
+                    SERVER_INSTANCE.stop()
+
+                    log.info('Forked worker pid = %s', os.getpid())
+
+                    import ctypes
+                    ctypes.CDLL(None).prctl(1, 9)
+
+                    from .shmem import filler
+                    filler.init_on_slave(slave_end)
+
+                    model, reuse_key = self._load_model(fn, args, kwargs)
+
+                    filler.commit()
+                    slave_end.send(('set_result', ((model, reuse_key),), {}))
+                    slave_end.recv()
+                except Exception as e:
+                    log.exception('Error loading model %s', disp)
+                    text = traceback.format_exc()
+                    try:
+                        slave_end.send(('set_exception', (ServiceExceptionInfo(type=type(e), desc=str(e), traceback=text),), {}))
+                        slave_end.recv()
+                    except:
+                        pass
+                finally:
+                    slave_end.close()
+                    os._exit(0)
 
             self._models_disp.append(disp)
 
-            del model
-
-            gc.collect()
-            torch.cuda.empty_cache()
-
             return self._models[key]
+
+    def _load_model(self, fn, args, kwargs):
+        disp = display_of(fn, args, kwargs)
+        reuse_key = base64.b32encode(random.randbytes(5)).decode('utf-8')
+        b4 = time.time()
+
+        fn, args, kwargs = self._pre_transform((fn, args, kwargs))
+        model = fn(*args, **kwargs)
+        model = self._post_transform(model)
+        try:
+            model.__dict__['_overmind_ref'] = OvermindRef(key=reuse_key, disp=disp)
+        except AttributeError:
+            pass
+
+        log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
+
+        b4 = time.time()
+        model = OvermindPickler.dumps(OvermindPickler.dumps(model))  # Double pickle, saving pickle to shared mem too!
+        model = bytes(model)
+        log.info('Pickled in %.3fs, size = %s bytes', time.time() - b4, len(model))
+        return model, reuse_key
 
     def _pre_transform(self, model):
         from multiprocessing.reduction import ForkingPickler as Pickler
@@ -179,28 +250,25 @@ class OvermindService:
         IPython.embed()
 
 
-class ThreadedServer:
+class BaseServer:
 
-    def __init__(self, service):
-        self.service = service
-        self.pool = ThreadPool(16)
+    def __init__(self, services: List[Any]):
+        self.services = services
 
-    def run(self):
-        omenv = OvermindEnv.get()
-        listener = Listener(omenv.comm_endpoint, authkey=omenv.venv_hash.encode('utf-8'))
-        log.info('Overmind server started at %s', omenv.comm_endpoint.replace("\x00", "@"))
-        while True:
-            client = listener.accept()
-            self.pool.apply_async(self._serve, [client])
-
-    def _serve(self, client: Connection):
+    @staticmethod
+    def serve_one(services: List[Any], client: Connection):
         try:
             while True:
                 req = client.recv()
                 fn = '<unknown>'
                 try:
                     fn, args, kwargs = req
-                    f = getattr(self.service, f'exposed_{fn}')
+                    for svc in reversed(services):
+                        f = getattr(svc, f'exposed_{fn}', None)
+                        if f is not None:
+                            break
+                    else:
+                        raise AttributeError(f'Function {fn} not found')
                     ret = f(*args, **kwargs)
                 except Exception as e:
                     log.exception(f'Error calling {fn}')
@@ -213,11 +281,73 @@ class ThreadedServer:
             pass
 
 
+class OneShotServer(BaseServer):
+
+    def __init__(self, services: List[Any], client: Connection):
+        super().__init__(services)
+        self.client = client
+
+    def run(self):
+        self.serve_one(self.services, self.client)
+
+    def stop(self):
+        pass
+
+
+class ThreadedServer(BaseServer):
+
+    def __init__(self, services: List[Any], listener: Listener):
+        super().__init__(services)
+        self.listener = listener
+
+    def run(self):
+        self.pool = ThreadPool(16)
+        while True:
+            try:
+                client = self.listener.accept()
+            except Exception:
+                break
+
+            self.pool.apply_async(self.serve_one, [self.services, client])
+
+        self.pool.join()
+
+    def stop(self):
+        self.listener.close()
+
+
+class NaiveServer(BaseServer):
+
+    def __init__(self, services: List[Any], listener: Listener):
+        super().__init__(services)
+        self.listener = listener
+
+    def run(self):
+        while True:
+            try:
+                client = self.listener.accept()
+            except Exception:
+                break
+
+            self.serve_one(self.services, client)
+
+    def stop(self):
+        self.listener.close()
+
+
+
 def main():
     import overmind.reducer
+    from . import common
     overmind.reducer.init_reductions_server()
 
-    server = ThreadedServer(OvermindService())
+    omenv = OvermindEnv.get()
+    listener = Listener(omenv.comm_endpoint, authkey=omenv.venv_hash.encode('utf-8'))
+    log.info('Overmind server started at %s, pid = %s', omenv.comm_endpoint.replace("\x00", "@"), os.getpid())
+
+    server = ThreadedServer([OvermindService()], listener)
+    assert common.SERVER_INSTANCE is None
+    common.SERVER_INSTANCE = server
     server.run()
 
 

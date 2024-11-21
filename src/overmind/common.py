@@ -17,6 +17,7 @@ import types
 
 # -- code --
 IN_OVERMIND_SERVER = None
+SERVER_INSTANCE = None
 
 
 class ServiceException(Exception):
