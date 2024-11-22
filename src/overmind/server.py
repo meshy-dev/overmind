@@ -53,19 +53,7 @@ class OvermindService:
     def exposed_ping(self):
         return 'pong'
 
-    def exposed_load(self, v, args, kwargs):
-        if isinstance(v, tuple):
-            # This makes pickle happy
-            m, n = v
-            fn = importlib.import_module(m)
-            for a in n.split('.'):
-                fn = getattr(fn, a)
-        else:
-            fn = v
-
-        key = key_of(fn, args, kwargs)
-        disp = display_of(fn, args, kwargs)
-
+    def exposed_load(self, fnspec, args, kwargs, key, disp):
         # Heuristics:
         import torch
 
@@ -160,6 +148,15 @@ class OvermindService:
 
                     from .shmem import filler
                     filler.init_on_slave(slave_end)
+
+                    if isinstance(fnspec, tuple):
+                        # This makes pickle happy
+                        m, n = fnspec
+                        fn = importlib.import_module(m)
+                        for a in n.split('.'):
+                            fn = getattr(fn, a)
+                    else:
+                        fn = fnspec
 
                     model, reuse_key = self._load_model(fn, args, kwargs)
 
