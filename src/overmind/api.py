@@ -162,13 +162,14 @@ class OvermindClient:
             return True, obj
 
         fn, args, kwargs = walk_obj((fn, args, kwargs), pre=replace_ref)
+        key = key_of(fn, args, kwargs)
         disp = display_of(fn, args, kwargs)
 
         if isinstance(fn, types.FunctionType):
             fn = (fn.__module__, fn.__qualname__)
 
         b4 = time.time()
-        b: bytes = self._call('load', fn, args, kwargs)
+        b: bytes = self._call('load', fn, args, kwargs, key, disp)
         rpc_time = time.time() - b4
         obj = Unpickler.loads(Unpickler.loads(b))
         log.info(f'Loaded {disp} in {time.time() - b4:.3f}s (rpc: {rpc_time:.3f}s)')
