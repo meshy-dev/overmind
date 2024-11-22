@@ -145,7 +145,8 @@ class OvermindClient:
         return ret
 
     def load(self, fn, *args, **kwargs):
-        from .reducer import OvermindUnpicker as Unpickler
+        from .reducer import OvermindUnpickler as Unpickler
+        from .reducer import ForkingPickler as Pickler
 
         if os.environ.get('OVERMIND_DISABLE'):
             log.warning('overmind disabled by OVERMIND_DISABLE env variable, loading model directly')
@@ -169,7 +170,7 @@ class OvermindClient:
             fn = (fn.__module__, fn.__qualname__)
 
         b4 = time.time()
-        b: bytes = self._call('load', fn, args, kwargs, key, disp)
+        b: bytes = self._call('load', Pickler.dumps(fn), args, kwargs, key, disp)
         rpc_time = time.time() - b4
         obj = Unpickler.loads(Unpickler.loads(b))
         log.info(f'Loaded {disp} in {time.time() - b4:.3f}s (rpc: {rpc_time:.3f}s)')

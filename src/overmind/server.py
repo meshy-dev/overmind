@@ -115,6 +115,7 @@ class OvermindService:
                 # Master
                 try:
                     slave_end.close()
+
                     from .shmem import hoarder
                     rsvc = _ResultService()
                     # hoarder is needed by filler on slave
@@ -137,6 +138,11 @@ class OvermindService:
                 try:
                     master_end.close()
 
+                    import torch._C
+                    torch._C._cuda_init = torch._C._cuda_init[1]
+                    torch._C._cuda_getDeviceCount = torch._C._cuda_getDeviceCount[1]
+                    torch._C._cuda_getArchFlags = torch._C._cuda_getArchFlags[1]
+
                     from .common import SERVER_INSTANCE
                     assert SERVER_INSTANCE is not None
                     SERVER_INSTANCE.stop()
@@ -148,6 +154,9 @@ class OvermindService:
 
                     from .shmem import filler
                     filler.init_on_slave(slave_end)
+
+                    from .reducer import OvermindUnpickler
+                    fnspec = OvermindUnpickler.loads(fnspec)
 
                     if isinstance(fnspec, tuple):
                         # This makes pickle happy
@@ -337,6 +346,12 @@ def main():
     import overmind.reducer
     from . import common
     overmind.reducer.init_reductions_server()
+
+    # CUDA sentinels to prevent CUDA initialization at master
+    import torch._C
+    torch._C._cuda_init = ('_real', torch._C._cuda_init)
+    torch._C._cuda_getDeviceCount = ('_real', torch._C._cuda_getDeviceCount)
+    torch._C._cuda_getArchFlags = ('_real', torch._C._cuda_getArchFlags)
 
     omenv = OvermindEnv.get()
     listener = Listener(omenv.comm_endpoint, authkey=omenv.venv_hash.encode('utf-8'))

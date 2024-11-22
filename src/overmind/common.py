@@ -64,7 +64,7 @@ def fqfn_of(fn):
             ty = fn.__self__
         else:
             ty = type(fn.__self__)
-        fndisp = f'{ty.__module__}.{ty.__qualname__}'
+        fndisp = f'{ty.__module__}.{fn.__qualname__}'
     else:
         fndisp = f'{fn.__module__}.{fn.__qualname__}'
 

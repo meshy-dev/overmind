@@ -41,10 +41,11 @@ class MyFormatter(logging.Formatter):
         import time
         rec.message = rec.getMessage()
         lvl = rec.levelname
-        prefix = '[{} {} {} {}:{}]'.format(
+        prefix = '[{} {} {} #{} {}:{}]'.format(
             lvl[0],
             time.strftime('%y%m%d %H:%M:%S'),
             rec.name,
+            os.getpid(),
             rec.module,
             rec.lineno,
         )

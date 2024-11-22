@@ -48,7 +48,7 @@ class OvermindPickler(dill.Pickler):
         cls._my_extra_reducers[type] = reduce
 
 
-class OvermindUnpicker(ForkingPickler):
+class OvermindUnpickler(ForkingPickler):
     def __init__(self, *args):
         super().__init__(*args)
         self.dispatch_table.update(OvermindPickler._my_extra_reducers)
