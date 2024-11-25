@@ -268,6 +268,7 @@ class BaseServer:
                 req = client.recv()
                 fn = '<unknown>'
                 try:
+                    log.debug('Got request %s from %s', req, client)
                     fn, args, kwargs = req
                     for svc in reversed(services):
                         f = getattr(svc, f'exposed_{fn}', None)
@@ -314,6 +315,7 @@ class ThreadedServer(BaseServer):
             except Exception:
                 break
 
+            log.debug('Accepted connection %s', client)
             self.pool.apply_async(self.serve_one, [self.services, client])
 
         self.pool.join()
