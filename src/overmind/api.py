@@ -170,7 +170,7 @@ class OvermindClient:
             fn = (fn.__module__, fn.__qualname__)
 
         b4 = time.time()
-        b: bytes = self._call('load', Pickler.dumps(fn), args, kwargs, key, disp)
+        b: bytes = self._call('load', bytes(Pickler.dumps(fn)), args, kwargs, key, disp)
         rpc_time = time.time() - b4
         obj = Unpickler.loads(Unpickler.loads(b))
         log.info(f'Loaded {disp} in {time.time() - b4:.3f}s (rpc: {rpc_time:.3f}s)')
