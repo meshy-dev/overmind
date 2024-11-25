@@ -184,7 +184,7 @@ class OvermindService:
                     slave_end.close()
                     os._exit(0)
 
-            self._models_disp.append(disp)
+            self._models_disp.append(f'{reuse_key} {disp}')
 
             return self._models[key]
 
