@@ -7,14 +7,11 @@ import base64
 import ctypes
 import logging
 import mmap
-import multiprocessing
-import multiprocessing.connection
+import os
 import random
 import threading
 
 # -- third party --
-import os
-
 # -- own --
 from .common import OvermindEnv
 
@@ -61,7 +58,7 @@ class SharedMemory:
         name = _make_filename(shift).encode('utf-8')
         fd = libc.memfd_create(name, os.O_RDWR)
         os.ftruncate(fd, 1 << shift)
-        mem_id = os.getpid(), fd
+        mem_id = (os.getpid(), fd)
         return cls(fd=fd, name=name, mem_id=mem_id, cookie=cls._COOKIE)
 
     @classmethod
@@ -118,19 +115,24 @@ class SharedMemory:
         return self._buf
 
     @property
-    def mem_id(self):
+    def mem_id(self) -> SharedMemoryId:
         if os.name == 'posix':
             return self._mem_id
         else:
             return self._name
+
+    def to_owned(self):
+        if os.name == 'posix':
+            self._mem_id = (os.getpid(), self._fd)
+        return self
 
     @classmethod
     def rebuild(cls, mem_id: SharedMemoryId):
         if os.name == 'posix':
             assert isinstance(mem_id, tuple)
             pid, fd = mem_id
-            fd = os.open(f'/proc/{pid}/fd/{fd}', os.O_RDWR)
-            return cls(fd=fd, mem_id=mem_id, cookie=cls._COOKIE)
+            local_fd = os.open(f'/proc/{pid}/fd/{fd}', os.O_RDWR)
+            return cls(fd=local_fd, mem_id=mem_id, cookie=cls._COOKIE)
         else:
             assert isinstance(mem_id, str)
             return cls(name=mem_id, cookie=cls._COOKIE)
@@ -139,38 +141,47 @@ class SharedMemory:
         return f'{self.__class__.__name__}({self._name!r}, size={self._size})'
 
 
+ArenaTag = int
+ContentHash = int
+
+
+@dataclass
+class ExportedArena:
+    tag: ArenaTag
+    mem_id: SharedMemoryId
+
 
 @dataclass
 class Fragment:
-    arena: SharedMemoryId
+    digest: ContentHash
+    arena: ArenaTag
     offset: int
     size: int
 
 
 @dataclass
-class ExportedArena:
-    tag: int
-    mem_id: SharedMemoryId
-    size: int
+class Arena:
+    tag: ArenaTag
+    mem: SharedMemory
     current: int
 
 
 @dataclass
-class Arena:
-    tag: int
-    mem: SharedMemory
-    current: int
+class ExportedHoarder:
+    shift: int
+    arenas: List[ExportedArena]
+    fragments: List[Fragment]
 
 
 class Hoarder:
 
     def __init__(self):
         self.shift = 33
-        self.arenas: Dict[int, Arena] = {}
-        self.fragments: Dict[int, Fragment] = {}
+        self.arenas: Dict[ArenaTag, Arena] = {}
+        self.fragments: Dict[ContentHash, Fragment] = {}
         self.lock = threading.RLock()
 
-    def exposed_allocate(self) -> ExportedArena | None:
+    def allocate(self):
         with self.lock:
             self.shift += 1
             log.debug('Hoarder: Creating new arena with shift = %s', self.shift)
@@ -181,60 +192,42 @@ class Hoarder:
                 current=0,
             )
             self.arenas[tag] = arena
-            return ExportedArena(
-                tag=arena.tag,
-                mem_id=arena.mem.mem_id,
-                size=len(arena.mem.view),
-                current=arena.current,
-            )
 
-    def exposed_merge(self, latest_ptrs: List[Tuple[int, int]], fragments: Dict[int, Fragment]):
-        with self.lock:
-            for tag, current in latest_ptrs:
-                self.arenas[tag].current = max(self.arenas[tag].current, current)
+    def export_arenas(self) -> List[ExportedArena]:
+        return [ExportedArena(tag=arena.tag, mem_id=arena.mem.mem_id) for arena in self.arenas.values()]
 
-            self.fragments.update(fragments)
-
-
-class Filler:
-    # Runs on forked slave
-
-    def __init__(self):
-        self.initialized = False
-        self.arenas: Dict[int, Arena] = {}
-        self.fragments: Dict[int, Fragment] = {}
-        self.new_fragments: Dict[int, Fragment] = {}
-        self.lock = threading.RLock()
-
-    def init_on_slave(self, conn: multiprocessing.connection.Connection):
-        assert not self.initialized
-        self.initialized = True
-        self.arenas = hoarder.arenas
-        self.fragments = hoarder.fragments
-
-        # conn is a Hoarder service
-        self.conn = conn
-
-    def request_arena(self):
-        self.conn.send(('allocate', (), {}))
-        arena = self.conn.recv()
-        log.debug('Filler: got new arena %s', arena)
-        self.arenas[arena.tag] = Arena(
-            tag=arena.tag,
-            mem=SharedMemory.rebuild(arena.mem_id),
-            current=0,
+    def export(self) -> ExportedHoarder:
+        arenas = self.export_arenas()
+        return ExportedHoarder(
+            shift=self.shift,
+            arenas=arenas,
+            fragments=list(self.fragments.values()),
         )
 
-    def commit(self):
-        assert self.initialized
+    def merge(self, exported: ExportedHoarder, take_ownership: bool):
         with self.lock:
-            args = ([[arena.tag, arena.current] for arena in self.arenas.values()], self.new_fragments)
-            self.conn.send(('merge', args, {}))
-            self.conn.recv()
-            self.new_fragments.clear()
+            self.shift = exported.shift
+
+            for a in exported.arenas:
+                if a.tag not in self.arenas:
+                    mem = SharedMemory.rebuild(a.mem_id)
+                    if take_ownership:
+                        mem.to_owned()
+                    self.arenas[a.tag] = Arena(tag=a.tag, mem=mem, current=0)
+
+            for frag in exported.fragments:
+                if frag.digest in self.fragments:
+                    continue
+
+                tag = frag.arena
+                assert tag in self.arenas
+                arena = self.arenas[tag]
+                current = frag.offset + frag.size
+                arena.current = max(arena.current, current)
+
+            self.fragments.update({frag.digest: frag for frag in exported.fragments})
 
     def put(self, data: 'bytes | memoryview | UntypedStorage', align=16):
-        assert self.initialized
         import overmind._C
         from torch import UntypedStorage
 
@@ -249,7 +242,7 @@ class Filler:
         with self.lock:
             size = len(data)
 
-            for _tag, arena in self.arenas.items():
+            for arena in self.arenas.values():
                 current = (arena.current + align - 1) & ~(align - 1)
 
                 if current + size > len(arena.mem.view):
@@ -263,12 +256,11 @@ class Filler:
                     overmind._C._memcpy_from_untyped_storage(memory, data)
                 else:
                     memory[:] = data
-                frag = Fragment(arena=arena.mem.mem_id, offset=current, size=size)
+                frag = Fragment(digest=digest, arena=arena.tag, offset=current, size=size)
                 self.fragments[digest] = frag
-                self.new_fragments[digest] = frag
                 return frag
             else:
-                self.request_arena()
+                self.allocate()
                 return self.put(data, align)
 
 
@@ -277,14 +269,15 @@ class Borrower:
     def __init__(self):
         self.arenas = {}
 
-    def borrow(self, fragment: Fragment):
-        if fragment.arena not in self.arenas:
-            self.arenas[fragment.arena] = SharedMemory.rebuild(fragment.arena)
+    def import_arenas(self, arenas: List[ExportedArena]):
+        for a in arenas:
+            if a.tag not in self.arenas:
+                self.arenas[a.tag] = SharedMemory.rebuild(a.mem_id)
 
+    def borrow(self, fragment: Fragment):
         mem = self.arenas[fragment.arena]
         return mem.view[fragment.offset:fragment.offset + fragment.size].toreadonly()
 
 
 hoarder = Hoarder()
-filler = Filler()
 borrower = Borrower()

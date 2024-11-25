@@ -15,10 +15,9 @@ import time
 import types
 
 # -- third party --
-
 # -- own --
 from . import common
-from .common import OvermindEnv, ServiceExceptionInfo, key_of, display_of
+from .common import OvermindEnv, ServiceCaller, display_of, key_of
 from .utils.misc import hook, walk_obj
 
 
@@ -39,12 +38,7 @@ class OvermindClient:
             raise Exception('Not connected')
 
         with self._client_lock:
-            self.client.send((fn, args, kwargs))
-            ret = self.client.recv()
-            if isinstance(ret, ServiceExceptionInfo):
-                raise ret.to_exception()
-
-        return ret
+            return ServiceCaller(self.client).call(fn, *args, **kwargs)
 
     def _is_client_ok(self):
         if not self.client:

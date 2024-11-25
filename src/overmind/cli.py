@@ -5,7 +5,7 @@ import sys
 
 # -- third party --
 from multiprocessing.connection import Client
-from .common import OvermindEnv
+from .common import OvermindEnv, ServiceCaller
 
 # -- own --
 
@@ -20,10 +20,8 @@ def _init_client():
 
 
 def list_loaded():
-    cli = _init_client()
-    cli.send(('list_loaded', (), {}))
-    l = cli.recv()
-    for i in l:
+    cli = ServiceCaller(_init_client())
+    for i in cli.list_loaded():
         print(i)
 
 def drop_shell():
