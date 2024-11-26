@@ -120,7 +120,7 @@ class OvermindService:
     def _slave(cls, conn):
         init_log()
 
-        log.info('Forked worker pid = %s', os.getpid())
+        log.info('Spawned worker pid = %s', os.getpid())
 
         import ctypes
         ctypes.CDLL(None).prctl(1, 9)
