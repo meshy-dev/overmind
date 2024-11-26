@@ -15,10 +15,9 @@ import time
 import types
 
 # -- third party --
-
 # -- own --
 from . import common
-from .common import OvermindEnv, ServiceExceptionInfo, key_of, display_of
+from .common import OvermindEnv, ServiceCaller, display_of, key_of
 from .utils.misc import hook, walk_obj
 
 
@@ -39,12 +38,7 @@ class OvermindClient:
             raise Exception('Not connected')
 
         with self._client_lock:
-            self.client.send((fn, args, kwargs))
-            ret = self.client.recv()
-            if isinstance(ret, ServiceExceptionInfo):
-                raise ret.to_exception()
-
-        return ret
+            return ServiceCaller(self.client).call(fn, *args, **kwargs)
 
     def _is_client_ok(self):
         if not self.client:
@@ -147,6 +141,7 @@ class OvermindClient:
     def load(self, fn, *args, **kwargs):
         from .reducer import OvermindUnpickler as Unpickler
         from .reducer import ForkingPickler as Pickler
+        from .shmem import borrower
 
         if os.environ.get('OVERMIND_DISABLE'):
             log.warning('overmind disabled by OVERMIND_DISABLE env variable, loading model directly')
@@ -170,8 +165,9 @@ class OvermindClient:
             fn = (fn.__module__, fn.__qualname__)
 
         b4 = time.time()
-        b: bytes = self._call('load', Pickler.dumps(fn), args, kwargs, key, disp)
+        arenas, b = self._call('load', bytes(Pickler.dumps(fn)), args, kwargs, key, disp)
         rpc_time = time.time() - b4
+        borrower.import_arenas(arenas)
         obj = Unpickler.loads(Unpickler.loads(b))
         log.info(f'Loaded {disp} in {time.time() - b4:.3f}s (rpc: {rpc_time:.3f}s)')
         return obj

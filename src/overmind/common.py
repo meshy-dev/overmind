@@ -8,6 +8,7 @@ import base64
 import dataclasses
 import hashlib
 import inspect
+import multiprocessing.connection
 import sys
 import tempfile
 import types
@@ -32,6 +33,30 @@ class ServiceException(Exception):
             f'Remote server encountered something wrong\n\n'
             '===== Remote Traceback =====\n\n'
         ) +  self.traceback
+
+
+@dataclass
+class ServiceCaller:
+    conn: multiprocessing.connection.Connection
+
+    def call(self, fn, *args, **kwargs):
+        self.conn.send((fn, args, kwargs))
+        ret = self.conn.recv()
+        if isinstance(ret, ServiceExceptionInfo):
+            raise ret.to_exception()
+        return ret
+
+    def __getattr__(self, fn):
+        return ServiceInstanceMethod(self, fn)
+
+
+@dataclass
+class ServiceInstanceMethod:
+    instance: ServiceCaller
+    method: str
+
+    def __call__(self, *args, **kwargs):
+        return self.instance.call(self.method, *args, **kwargs)
 
 
 @dataclass

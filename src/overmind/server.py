@@ -4,12 +4,13 @@
 from multiprocessing.connection import Connection, Listener
 from multiprocessing.pool import ThreadPool
 from pathlib import Path
-from typing import Any, List
+from typing import Any, Dict, List
 import argparse
 import base64
 import importlib
 import logging
 import multiprocessing
+import os
 import random
 import sys
 import threading
@@ -17,10 +18,8 @@ import time
 import traceback
 
 # -- third party --
-import os
-
 # -- own --
-from .common import OvermindEnv, ServiceExceptionInfo, display_of, key_of
+from .common import OvermindEnv, ServiceCaller, ServiceExceptionInfo, display_of
 from .reducer import OvermindPickler, OvermindRef
 from .utils.misc import walk_obj
 
@@ -29,31 +28,18 @@ from .utils.misc import walk_obj
 log = logging.getLogger('overmind.server')
 
 
-class _ResultService:
-
-    def __init__(self):
-        self.result: Any = None
-        self.exception: Any = None
-
-    def exposed_set_result(self, result):
-        self.result = result
-
-    def exposed_set_exception(self, exception):
-        self.exception = exception
-
-
 class OvermindService:
 
     def __init__(self):
         super().__init__()
-        self._models = {}
-        self._models_disp = []  # solely for debugging
+        self._models: Dict[str, bytes] = {}
+        self._models_disp: List[str] = []  # solely for debugging
         self._loading = threading.Lock()
 
-    def exposed_ping(self):
+    def ping(self):
         return 'pong'
 
-    def exposed_load(self, fnspec, args, kwargs, key, disp):
+    def load(self, fnspec, args, kwargs, key, disp):
         # Heuristics:
         import torch
 
@@ -98,129 +84,116 @@ class OvermindService:
             break
         # End of heuristics
 
+        from .shmem import hoarder
+
         if key in self._models:
             payload = self._models[key]
             log.debug('Providing cached model %s (%s bytes over wire)', disp, len(payload))
-            return payload
+            return hoarder.export_arenas(), payload
 
         with self._loading:
             if key in self._models:
                 log.debug('Providing cached model (just loaded!) %s', disp)
-                return self._models[key]
+                return hoarder.export_arenas(), self._models[key]
 
             log.info('Cold load model %s', disp)
 
             master_end, slave_end = multiprocessing.Pipe()
-            if pid := os.fork():
-                # Master
+            slave_proc = multiprocessing.Process(target=self._slave, args=(slave_end,))
+            try:
+                slave_proc.start()
+                slave = ServiceCaller(master_end)
+                slave.push_state(hoarder.export(), self._models)
+                model, reuse_key = slave.load_model(fnspec, args, kwargs)
+                model = bytes(model)
+                hoarder_state = slave.pull_state()
+                hoarder.merge(hoarder_state, True)
+                self._models[key] = model
+                self._models[reuse_key] = model
+                self._models_disp.append(f'{reuse_key} {disp}')
+                return hoarder.export_arenas(), self._models[key]
+            finally:
+                slave_proc.kill()
+                slave_proc.join()
+
+    @classmethod
+    def _slave(cls, conn):
+        init_log()
+
+        log.info('Spawned worker pid = %s', os.getpid())
+
+        import ctypes
+        ctypes.CDLL(None).prctl(1, 9)
+
+        from .reducer import init_reductions_server
+        init_reductions_server()
+
+        from .shmem import ExportedHoarder
+
+        class SlaveService:
+
+            def push_state(self, hoarder_state: ExportedHoarder, existing_models: Dict[str, bytes]):
+                from .shmem import hoarder
+                hoarder.merge(hoarder_state, False)
+                self._models = existing_models
+
+            def pull_state(self):
+                from .shmem import hoarder
+                return hoarder.export()
+
+            def load_model(self, fnspec, args, kwargs):
+                from .shmem import borrower
+                borrower.link_to_hoarder()
+
+                from .reducer import OvermindUnpickler
+                fnspec = OvermindUnpickler.loads(fnspec)
+
+                if isinstance(fnspec, tuple):
+                    # This makes pickle happy
+                    m, n = fnspec
+                    fn = importlib.import_module(m)
+                    for a in n.split('.'):
+                        fn = getattr(fn, a)
+                else:
+                    fn = fnspec
+
+                disp = display_of(fn, args, kwargs)
+                reuse_key = base64.b32encode(random.randbytes(5)).decode('utf-8')
+                b4 = time.time()
+
+                fn, args, kwargs = cls._pre_transform((fn, args, kwargs), self._models)
+                model = fn(*args, **kwargs)
+                model = cls._post_transform(model)
                 try:
-                    slave_end.close()
+                    model.__dict__['_overmind_ref'] = OvermindRef(key=reuse_key, disp=disp)
+                except AttributeError:
+                    pass
 
-                    from .shmem import hoarder
-                    rsvc = _ResultService()
-                    # hoarder is needed by filler on slave
-                    OneShotServer([hoarder, rsvc], master_end).run()
+                log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
 
-                    if rsvc.exception:
-                        return rsvc.exception
+                b4 = time.time()
+                model = OvermindPickler.dumps(OvermindPickler.dumps(model))  # Double pickle, saving pickle to shared mem too!
+                model = bytes(model)
+                log.info('Pickled in %.3fs, size = %s bytes', time.time() - b4, len(model))
+                return model, reuse_key
 
-                    if rsvc.result is None:
-                        raise ValueError(f'Model {disp} failed to load')
+        server = OneShotServer([SlaveService()], conn)
+        server.run()
 
-                    model, reuse_key = rsvc.result
-                    self._models[key] = model
-                    self._models[reuse_key] = model
-                finally:
-                    os.kill(pid, 9)
-                    os.waitpid(pid, 0)
-            else:
-                # Slave
-                try:
-                    master_end.close()
-
-                    import torch._C
-                    torch._C._cuda_init = torch._C._cuda_init[1]
-                    torch._C._cuda_getDeviceCount = torch._C._cuda_getDeviceCount[1]
-                    torch._C._cuda_getArchFlags = torch._C._cuda_getArchFlags[1]
-
-                    from .common import SERVER_INSTANCE
-                    assert SERVER_INSTANCE is not None
-                    SERVER_INSTANCE.stop()
-
-                    log.info('Forked worker pid = %s', os.getpid())
-
-                    import ctypes
-                    ctypes.CDLL(None).prctl(1, 9)
-
-                    from .shmem import filler
-                    filler.init_on_slave(slave_end)
-
-                    from .reducer import OvermindUnpickler
-                    fnspec = OvermindUnpickler.loads(fnspec)
-
-                    if isinstance(fnspec, tuple):
-                        # This makes pickle happy
-                        m, n = fnspec
-                        fn = importlib.import_module(m)
-                        for a in n.split('.'):
-                            fn = getattr(fn, a)
-                    else:
-                        fn = fnspec
-
-                    model, reuse_key = self._load_model(fn, args, kwargs)
-
-                    filler.commit()
-                    slave_end.send(('set_result', ((model, reuse_key),), {}))
-                    slave_end.recv()
-                except Exception as e:
-                    log.exception('Error loading model %s', disp)
-                    text = traceback.format_exc()
-                    try:
-                        slave_end.send(('set_exception', (ServiceExceptionInfo(type=type(e), desc=str(e), traceback=text),), {}))
-                        slave_end.recv()
-                    except:
-                        pass
-                finally:
-                    slave_end.close()
-                    os._exit(0)
-
-            self._models_disp.append(disp)
-
-            return self._models[key]
-
-    def _load_model(self, fn, args, kwargs):
-        disp = display_of(fn, args, kwargs)
-        reuse_key = base64.b32encode(random.randbytes(5)).decode('utf-8')
-        b4 = time.time()
-
-        fn, args, kwargs = self._pre_transform((fn, args, kwargs))
-        model = fn(*args, **kwargs)
-        model = self._post_transform(model)
-        try:
-            model.__dict__['_overmind_ref'] = OvermindRef(key=reuse_key, disp=disp)
-        except AttributeError:
-            pass
-
-        log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
-
-        b4 = time.time()
-        model = OvermindPickler.dumps(OvermindPickler.dumps(model))  # Double pickle, saving pickle to shared mem too!
-        model = bytes(model)
-        log.info('Pickled in %.3fs, size = %s bytes', time.time() - b4, len(model))
-        return model, reuse_key
-
-    def _pre_transform(self, model):
+    @staticmethod
+    def _pre_transform(model, existing_models):
         from multiprocessing.reduction import ForkingPickler as Pickler
 
         def pre_transform(m):
             if isinstance(m, OvermindRef):
-                m = Pickler.loads(Pickler.loads(self._models[m.key]))
+                m = Pickler.loads(Pickler.loads(existing_models[m.key]))
                 return False, m
             return True, m
 
         return walk_obj(model, pre=pre_transform)
 
-    def _post_transform(self, model):
+    @staticmethod
+    def _post_transform(model):
         import torch
 
         def post_transform(m):
@@ -242,16 +215,17 @@ class OvermindService:
 
             return False, m
 
-        return walk_obj(model, pre=post_transform)
+        model = walk_obj(model, pre=post_transform)
+        return model
 
-    def exposed_shutdown(self):
+    def shutdown(self):
         log.info('!! Bye')
         os._exit(0)
 
-    def exposed_list_loaded(self):
+    def list_loaded(self):
         return self._models_disp
 
-    def exposed_drop_shell(self):
+    def drop_shell(self):
         import IPython
         IPython.embed()
 
@@ -269,8 +243,11 @@ class BaseServer:
                 fn = '<unknown>'
                 try:
                     fn, args, kwargs = req
+                    if fn.startswith('_'):
+                        raise AttributeError(f'Function {fn} not found')
+
                     for svc in reversed(services):
-                        f = getattr(svc, f'exposed_{fn}', None)
+                        f = getattr(svc, fn, None)
                         if f is not None:
                             break
                     else:
@@ -343,9 +320,8 @@ class NaiveServer(BaseServer):
 
 
 def main():
-    import overmind.reducer
     from . import common
-    overmind.reducer.init_reductions_server()
+    multiprocessing.set_start_method('spawn')
 
     # CUDA sentinels to prevent CUDA initialization at master
     import torch._C
@@ -363,10 +339,14 @@ def main():
     server.run()
 
 
-def daemon_main():
+def init_log():
     from overmind.utils.log import init as init_log
     omenv = OvermindEnv.get()
     init_log(logging.DEBUG, f'/tmp/overmind.{omenv.venv_hash}.log')
+
+
+def daemon_main():
+    init_log()
     main()
 
 
