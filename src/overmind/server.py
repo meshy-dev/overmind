@@ -36,10 +36,10 @@ class OvermindService:
         self._models_disp: List[str] = []  # solely for debugging
         self._loading = threading.Lock()
 
-    def exposed_ping(self):
+    def ping(self):
         return 'pong'
 
-    def exposed_load(self, fnspec, args, kwargs, key, disp):
+    def load(self, fnspec, args, kwargs, key, disp):
         # Heuristics:
         import torch
 
@@ -84,15 +84,17 @@ class OvermindService:
             break
         # End of heuristics
 
+        from .shmem import hoarder
+
         if key in self._models:
             payload = self._models[key]
             log.debug('Providing cached model %s (%s bytes over wire)', disp, len(payload))
-            return payload
+            return hoarder.export_arenas(), payload
 
         with self._loading:
             if key in self._models:
                 log.debug('Providing cached model (just loaded!) %s', disp)
-                return self._models[key]
+                return hoarder.export_arenas(), self._models[key]
 
             log.info('Cold load model %s', disp)
 
@@ -101,7 +103,6 @@ class OvermindService:
             try:
                 slave_proc.start()
                 slave = ServiceCaller(master_end)
-                from .shmem import hoarder
                 slave.push_state(hoarder.export(), self._models)
                 model, reuse_key = slave.load_model(fnspec, args, kwargs)
                 model = bytes(model)
@@ -110,12 +111,15 @@ class OvermindService:
                 self._models[key] = model
                 self._models[reuse_key] = model
                 self._models_disp.append(f'{reuse_key} {disp}')
-                return self._models[key]
+                return hoarder.export_arenas(), self._models[key]
             finally:
                 slave_proc.kill()
+                slave_proc.join()
 
     @classmethod
     def _slave(cls, conn):
+        init_log()
+
         log.info('Forked worker pid = %s', os.getpid())
 
         import ctypes
@@ -156,7 +160,11 @@ class OvermindService:
 
                 fn, args, kwargs = cls._pre_transform((fn, args, kwargs), self._models)
                 model = fn(*args, **kwargs)
-                model = cls._post_transform(model, reuse_key)
+                model = cls._post_transform(model)
+                try:
+                    model.__dict__['_overmind_ref'] = OvermindRef(key=reuse_key, disp=disp)
+                except AttributeError:
+                    pass
 
                 log.info('Model %s loaded in %.3fs', disp, time.time() - b4)
 
@@ -166,7 +174,7 @@ class OvermindService:
                 log.info('Pickled in %.3fs, size = %s bytes', time.time() - b4, len(model))
                 return model, reuse_key
 
-        server = NaiveServer([SlaveService()], conn)
+        server = OneShotServer([SlaveService()], conn)
         server.run()
 
     @staticmethod
@@ -182,7 +190,7 @@ class OvermindService:
         return walk_obj(model, pre=pre_transform)
 
     @staticmethod
-    def _post_transform(model, reuse_key):
+    def _post_transform(model):
         import torch
 
         def post_transform(m):
@@ -205,21 +213,16 @@ class OvermindService:
             return False, m
 
         model = walk_obj(model, pre=post_transform)
-        try:
-            model.__dict__['_overmind_ref'] = OvermindRef(key=reuse_key, disp=disp)
-        except AttributeError:
-            pass
-
         return model
 
-    def exposed_shutdown(self):
+    def shutdown(self):
         log.info('!! Bye')
         os._exit(0)
 
-    def exposed_list_loaded(self):
+    def list_loaded(self):
         return self._models_disp
 
-    def exposed_drop_shell(self):
+    def drop_shell(self):
         import IPython
         IPython.embed()
 
@@ -236,10 +239,12 @@ class BaseServer:
                 req = client.recv()
                 fn = '<unknown>'
                 try:
-                    log.debug('Got request %s from %s', req, client)
                     fn, args, kwargs = req
+                    if fn.startswith('_'):
+                        raise AttributeError(f'Function {fn} not found')
+
                     for svc in reversed(services):
-                        f = getattr(svc, f'exposed_{fn}', None)
+                        f = getattr(svc, fn, None)
                         if f is not None:
                             break
                     else:
@@ -283,7 +288,6 @@ class ThreadedServer(BaseServer):
             except Exception:
                 break
 
-            log.debug('Accepted connection %s', client)
             self.pool.apply_async(self.serve_one, [self.services, client])
 
         self.pool.join()
@@ -314,6 +318,7 @@ class NaiveServer(BaseServer):
 
 def main():
     from . import common
+    multiprocessing.set_start_method('spawn')
 
     # CUDA sentinels to prevent CUDA initialization at master
     import torch._C
@@ -331,10 +336,14 @@ def main():
     server.run()
 
 
-def daemon_main():
+def init_log():
     from overmind.utils.log import init as init_log
     omenv = OvermindEnv.get()
     init_log(logging.DEBUG, f'/tmp/overmind.{omenv.venv_hash}.log')
+
+
+def daemon_main():
+    init_log()
     main()
 
 

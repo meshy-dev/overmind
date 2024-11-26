@@ -56,7 +56,7 @@ class ServiceInstanceMethod:
     method: str
 
     def __call__(self, *args, **kwargs):
-        return self.instance.call(self.instance, *args, **kwargs)
+        return self.instance.call(self.method, *args, **kwargs)
 
 
 @dataclass
