@@ -267,15 +267,22 @@ class Hoarder:
 class Borrower:
 
     def __init__(self):
-        self.arenas = {}
+        self.arenas: Dict[ArenaTag, Arena] = {}
 
     def import_arenas(self, arenas: List[ExportedArena]):
         for a in arenas:
             if a.tag not in self.arenas:
-                self.arenas[a.tag] = SharedMemory.rebuild(a.mem_id)
+                self.arenas[a.tag] = Arena(
+                    tag=a.tag,
+                    mem=SharedMemory.rebuild(a.mem_id),
+                    current=0,  # doesn't matter here
+                )
+
+    def link_to_hoarder(self):
+        self.arenas = hoarder.arenas
 
     def borrow(self, fragment: Fragment):
-        mem = self.arenas[fragment.arena]
+        mem = self.arenas[fragment.arena].mem
         return mem.view[fragment.offset:fragment.offset + fragment.size].toreadonly()
 
 

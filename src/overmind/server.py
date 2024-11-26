@@ -142,6 +142,9 @@ class OvermindService:
                 return hoarder.export()
 
             def load_model(self, fnspec, args, kwargs):
+                from .shmem import borrower
+                borrower.link_to_hoarder()
+
                 from .reducer import OvermindUnpickler
                 fnspec = OvermindUnpickler.loads(fnspec)
 
