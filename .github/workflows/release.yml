@@ -11,17 +11,20 @@ concurrency:
 
 jobs:
   build_linux:
-    name: Build and Push (Linux)
+    name: Build and Push (Linux - Python ${{ matrix.python-version }})
     runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
     - name: Free Disk Space (Ubuntu)
       uses: jlumbroso/free-disk-space@main
     - name: Check out the repo
       uses: actions/checkout@v4
-    - name: Setup Python 3.10
+    - name: Setup Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: ${{ matrix.python-version }}
         cache: pip
     - name: Build Wheel
       run: |
@@ -39,15 +42,18 @@ jobs:
         python3 -m twine upload dist/*.whl
 
   build_windows:
-    name: Build and Push (Windows)
+    name: Build and Push (Windows - Python ${{ matrix.python-version }})
     runs-on: windows-2022
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
     - name: Check out the repo
       uses: actions/checkout@v4
-    - name: Setup Python 3.10
+    - name: Setup Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: ${{ matrix.python-version }}
         cache: pip
     - name: Build Wheel
       run: |
