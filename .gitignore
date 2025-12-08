@@ -101,15 +101,9 @@ ipython_config.py
 #   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
 #poetry.lock
 
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#pdm.lock
-#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
-#   in version control.
-#   https://pdm-project.org/#use-with-ide
-.pdm.toml
-.pdm-python
-.pdm-build/
+# uv
+#   uv.lock should be committed to version control
+.python-version
 
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
 __pypackages__/
@@ -163,5 +157,5 @@ cython_debug/
 
 compile_commands.json
 
-# Managed by pdm
-setup.py
+# setuptools-scm generated version file
+src/overmind/_version.py

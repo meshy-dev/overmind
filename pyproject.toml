@@ -7,12 +7,12 @@ authors = [
 ]
 dependencies = [
     "daemonize>=2.5.0",
-    "torch>=2.3.0,<3.0.0",
+    "torch==2.3.1",
     "dill",
 ]
-requires-python = ">=3.10"
+requires-python = ">3.12.9,<3.13.0"
 readme = "README.md"
-license = {text = "Apache"}
+license = "Apache-2.0"
 
 [project.scripts]
 overmind-server = "overmind.server:start"
@@ -21,14 +21,12 @@ overmind-shutdown= "overmind.cli:shutdown"
 overmind-drop-shell= "overmind.cli:drop_shell"
 
 [build-system]
-requires = ["pdm-backend", "torch==2.3.0", "setuptools<70.0.0", "numpy"]
-build-backend = "pdm.backend"
+requires = ["setuptools>=61", "wheel", "setuptools-scm>=8.0", "torch==2.3.1", "numpy"]
+build-backend = "setuptools.build_meta"
 
-[tool.pdm]
-distribution = true
+[tool.setuptools]
+packages = ["overmind"]
+package-dir = {"" = "src"}
 
-[tool.pdm.build]
-run-setuptools = true
-
-[tool.pdm.version]
-source = "scm"
+[tool.setuptools_scm]
+write_to = "src/overmind/_version.py"
