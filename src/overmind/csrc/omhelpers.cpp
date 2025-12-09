@@ -162,10 +162,12 @@ void initOvermindHelpers(py::module m) {
                     at::DeviceType::CPU
                 ),
                 /*allocator=*/nullptr,
-                /*resizable=*/false),
-	    c10::impl::PyInterpreterStatus::DEFINITELY_UNINITIALIZED
-            )
-        );
+                /*resizable=*/false)
+#if TORCH_VERSION_MAJOR < 2 || (TORCH_VERSION_MAJOR == 2 && TORCH_VERSION_MINOR < 9)
+            ,
+            c10::impl::PyInterpreterStatus::DEFINITELY_UNINITIALIZED
+#endif
+        ));
     });
 
     m.def(
