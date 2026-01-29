@@ -207,7 +207,11 @@ void initOvermindHelpers(py::module m) {
             }
 
             auto src_storage = reinterpret_cast<THPStorage*>(src.ptr());
+#if TORCH_VERSION_MAJOR == 2 && TORCH_VERSION_MINOR >= 10
+            auto src_storage_impl = &src_storage->cdata;
+#else
             auto src_storage_impl = src_storage->cdata;
+#endif
             auto src_ptr = src_storage_impl->data_ptr().get();
             auto src_size = src_storage_impl->nbytes();
             return metrohash64_1((const uint8_t*)src_ptr, src_size, 233);
@@ -242,7 +246,11 @@ void initOvermindHelpers(py::module m) {
             }
 
             auto src_storage = reinterpret_cast<THPStorage*>(src.ptr());
+#if TORCH_VERSION_MAJOR == 2 && TORCH_VERSION_MINOR >= 10
+            auto src_storage_impl = &src_storage->cdata;
+#else
             auto src_storage_impl = src_storage->cdata;
+#endif
             auto src_ptr = src_storage_impl->data_ptr().get();
             auto src_size = src_storage_impl->nbytes();
             if (src_size != (size_t)dst_info.size) {
