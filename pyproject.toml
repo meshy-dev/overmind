@@ -10,15 +10,15 @@ dependencies = [
     "torch>=2.3.0,<3.0.0",
     "dill",
 ]
-requires-python = ">3.12.9,<3.13.0"
+requires-python = ">3.9.0,<3.13.0"
 readme = "README.md"
 license = "Apache-2.0"
 
 [project.scripts]
 overmind-server = "overmind.server:start"
 overmind-list = "overmind.cli:list_loaded"
-overmind-shutdown= "overmind.cli:shutdown"
-overmind-drop-shell= "overmind.cli:drop_shell"
+overmind-shutdown = "overmind.cli:shutdown"
+# overmind-drop-shell = "overmind.cli:drop_shell"
 
 [build-system]
 requires = ["setuptools>=80.9.0", "wheel", "setuptools-scm>=9.2.2", "torch>=2.3.0,<3.0.0", "numpy"]
