@@ -17,20 +17,16 @@ def load_pipeline():
         "lemon2431/ChineseInkComicStrip_v10",
         subfolder="vae",
         torch_dtype=torch.float16,
-        device_map='cuda',
     ))()
-    print(vae.device)
     controlnet_depth = (lambda: ControlNetModel.from_pretrained(
         "lllyasviel/control_v11f1p_sd15_depth",
         torch_dtype=torch.float16,
         variant="fp16",
-        device_map='cuda',
     ))()
     controlnet_edge = (lambda: ControlNetModel.from_pretrained(
         "lllyasviel/control_v11p_sd15_softedge",
         torch_dtype=torch.float16,
         variant="fp16",
-        device_map='cuda',
     ))()
 
     pipeline = (lambda: StableDiffusionControlNetPipeline.from_pretrained(
@@ -39,10 +35,8 @@ def load_pipeline():
         vae=vae,
         torch_dtype=torch.float16,
         safety_checker=None,
-        device_map='cuda',
     ))()
 
-    # (lambda: pipeline.to('cuda'))()
-    print(pipeline.device)
+    (lambda: pipeline.to('cuda'))()
 
 load_pipeline()
