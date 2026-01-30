@@ -1,5 +1,5 @@
 [project]
-name = "overmind"
+name = "overmind-cache"
 dynamic = ["version"]
 description = "Daemon to serve shared PyTorch models"
 authors = [
