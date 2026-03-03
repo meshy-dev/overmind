@@ -21,17 +21,16 @@ jobs:
       uses: jlumbroso/free-disk-space@main
     - name: Check out the repo
       uses: actions/checkout@v4
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
     - name: Setup Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-        cache: pip
     - name: Build Wheel
       run: |
         set -x
-        pip install --upgrade pip
-        pip install -U 'pdm>=2.20.0' twine torch==2.3.0 setuptools
-        pdm build -vv
+        uv build
     - name: Release to PyPI
       if: ${{ github.event_name == 'release' }}
       run: |
@@ -39,7 +38,7 @@ jobs:
         export TWINE_PASSWORD=${{ secrets.TWINE_PASSWORD }}
         export TWINE_REPOSITORY_URL=https://nexus.meshy.ai/repository/pypi/
         export TWINE_NON_INTERACTIVE='true'
-        python3 -m twine upload dist/*.whl
+        uvx twine upload dist/*.whl
 
   build_windows:
     name: Build and Push (Windows - Python ${{ matrix.python-version }})
@@ -50,17 +49,15 @@ jobs:
     steps:
     - name: Check out the repo
       uses: actions/checkout@v4
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
     - name: Setup Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
-        cache: pip
     - name: Build Wheel
       run: |
-        $env:PATH="$env:APPDATA\Python\Library\Bin;$env:PATH"
-        pip install --upgrade pip
-        pip install -U 'pdm>=2.20.0' twine torch==2.1.2 setuptools
-        pdm build -vv
+        uv build
     - name: Release to PyPI
       if: ${{ github.event_name == 'release' }}
       run: |
@@ -68,4 +65,4 @@ jobs:
         $env:TWINE_PASSWORD="${{ secrets.TWINE_PASSWORD }}"
         $env:TWINE_REPOSITORY_URL="https://nexus.meshy.ai/repository/pypi/"
         $env:TWINE_NON_INTERACTIVE="true"
-        python3 -m twine upload dist/*.whl
+        uvx twine upload dist/*.whl
