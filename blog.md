@@ -2,7 +2,7 @@
 
 ## Rationale
 
-It all begins 2 years ago, when we shipped our first try of lowpoly generation mode. The lowpoly mode did not go well, it emits poor results from today's perspective, but we paid a lot for it -- a dedicated GPU only processes single digit tasks per day. It has fine-tuned weights, big enough to drive all other model weights out of VRAM. Worse, we have maybe 3 such modes (can't remember the exact number), they constituted a significant part of our inference infra, made a quite unforgiving efficiency ratio. And no, we can't naively load the models just-in-time, it costs 30s, larger than the actual processing time.
+It all begins 2 years ago, when we shipped our first try of lowpoly generation mode. The lowpoly mode did not go well, it emits poor results from today's perspective, but we paid a lot for it -- a dedicated GPU only processes single digit tasks per day. It has fine-tuned weights, big enough to drive all other model weights out of VRAM. Worse, we have maybe 3 such models (can't remember the exact number), they constituted a significant part of our inference infra, made a quite unforgiving efficiency ratio. And no, we can't naively load the models just-in-time, it costs 30s, larger than the actual processing time.
 
 We don't have dedicated pipeline engineers then, our algorithm devs tried their best to workaround this. Days later, our codebase was littered with `this.to('cpu')` and `that.to('cuda')`. This approach works for a while, but break the flow of our algo devs from time to time. What if things can happen automagically? It's Python, things do happen automagically in Python.
 
@@ -428,4 +428,4 @@ Later, we found it to be a great boost to our algorithm and pipeline developers.
 
 ## Github
 
-We are open-sourcing it on [Github](https://github.com/taichi-dev/overmind), we'll be happy if it helped.
+We are open-sourcing it on [Github](https://github.com/meshy-dev/overmind), we'll be happy if it helped.

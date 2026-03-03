@@ -28,7 +28,7 @@ pip install overmind-cache
 Or install from source:
 
 ```bash
-git clone https://github.com/taichi-dev/overmind.git
+git clone https://github.com/meshy-dev/overmind.git
 cd overmind
 pip install -e .
 ```
@@ -142,4 +142,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Acknowledgments
 
-Developed by [Taichi Graphics](https://github.com/taichi-dev) for production AI inference workloads.
+Developed by [Meshy.AI](https://github.com/meshy-dev) for production AI inference workloads.
