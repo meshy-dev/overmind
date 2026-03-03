@@ -1,5 +1,11 @@
 # Overmind: A non-intrusive method/library to cut model loading time from 15s -> 0.2s
 
+## TL;DR
+
+ML model loading is slow, even with warmed Linux page cache. So we built a library to make it fast.
+There are some interesting technical details we want to share, so we wrote this blog.
+The library also made an unexpected impact, discussed in the ending.
+
 ## Rationale
 
 It all begins 2 years ago, when we shipped our first try of lowpoly generation mode. The lowpoly mode did not go well, it emits poor results from today's perspective, but we paid a lot for it -- a dedicated GPU only processes single digit tasks per day. It has fine-tuned weights, big enough to drive all other model weights out of VRAM. Worse, we have maybe 3 such models (can't remember the exact number), they constituted a significant part of our inference infra, made a quite unforgiving efficiency ratio. And no, we can't naively load the models just-in-time, it costs 30s, larger than the actual processing time.
