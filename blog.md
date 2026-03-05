@@ -10,7 +10,7 @@ The library also made an unexpected impact, discussed in the ending.
 
 It all begins 2 years ago, when we shipped our first try of lowpoly generation mode. The lowpoly mode did not go well, it emits poor results from today's perspective, but we paid a lot for it -- a dedicated GPU only processes single digit tasks per day. It has fine-tuned weights, big enough to drive all other model weights out of VRAM. Worse, we have maybe 3 such models (can't remember the exact number), they constituted a significant part of our inference infra, made a quite unforgiving efficiency ratio. And no, we can't naively load the models just-in-time, it costs 30s, larger than the actual processing time.
 
-We don't have dedicated pipeline engineers then, our algorithm devs tried their best to workaround this. Days later, our codebase was littered with `this.to('cpu')` and `that.to('cuda')`. This approach works for a while, but break the flow of our algo devs from time to time. What if things can happen automagically? It's Python, things do happen automagically in Python.
+We don't have dedicated pipeline engineers then, our algorithm devs tried their best to workaround this by swap model weights in and out. Days later, our codebase was littered with `this.to('cpu')` and `that.to('cuda')`. This approach works for a while, but break the flow of our algo devs from time to time. What if things can happen automagically? It's Python, things do happen automagically in Python.
 
 ## How do you define 'automagically' ?
 
@@ -28,7 +28,7 @@ We skip discussing about how monkey-patching is implemented, that's a not-so-int
 
 We use `pickle` to serialize our cache result since... we have no choice, and `torch.save` itself uses `pickle`, it's weird not to use it.
 
-We use a client/server architecture since we don't want to invalidate our cache when process terminates. There are many subprocess calls could benefit from it.
+We use a client/server architecture since we don't want to invalidate our cache when process terminates. At the same time, subprocess calls could also benefit from already loaded cache.
 
 We assume `XXXPipeline.from_pretrained` parameters to be simple hashable things (`str` and things alike) and other models loaded by `overmind` (explained later).
 
@@ -38,11 +38,11 @@ The name `overmind` is borrowed from Starcraft, as you may have guessed.
 
 We can't naively save `pickle.loads` result in memory and call it a day. After all, on a warmed up scenario, Linux page cache did its job caching on-disk models and we can still see a loading time measured in tens of seconds.
 
-The inefficiency comes from memory copying. In Python, even creating millions of objects would cost no more than several hundred ms. However, for a memory copy of 10GiB, it would cost half a second. We must avoid memory copy as much as possible.
+The inefficiency comes from memory copying. In Python, even creating millions of objects would cost no more than a hundred ms. However, for a memory copy of 10GiB, it would cost half a second. We must avoid memory copy as much as possible.
 
 Fortunately, most of the big memory chunks are Torch tensors, we can safely address only them and ignore the rest.
 
-Actually, I got the knowledge of the internal structure of a Torch tensor in the reduction code while researching the tensor sharing mechanism:
+I got the knowledge of the internal structure of a Torch tensor in the reduction code while researching the tensor sharing mechanism:
 
 ```python
 # Copied from torch.multiprocessing.reductions, most of the code is removed
